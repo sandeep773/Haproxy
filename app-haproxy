@@ -1,0 +1,2264 @@
+global
+  log 127.0.0.1 local0
+  maxconn 100000
+  ulimit-n 4000033
+  maxpipes 400000
+  nbthread 3
+  cpu-map auto:1/1-3   1-3
+  #make sure this is updated if the number of cores of the haproxy are increased
+  #stats bind-process 1
+  user haproxy
+  group root
+  tune.ssl.default-dh-param 2048
+  stats socket /var/run/haproxy/haproxy.sock level admin mode 600
+  stats timeout 30s
+  daemon
+  ssl-default-bind-options no-tlsv10 no-tlsv11
+
+defaults
+  log   global
+  mode  http
+  option  httplog
+  option  http-ignore-probes
+  retries 3
+  option redispatch
+  timeout http-request 8s
+  timeout client-fin  5s
+  timeout connect 3s
+  timeout client  10s
+  timeout server  10s
+  option splice-auto
+  option tcp-smart-connect
+  option tcp-smart-accept
+  maxconn 400000
+  # %ci  | client_ip                 (accepted address)                 | IP
+  # %cp  | client_port               (accepted address)                 | numeric
+  # %tr  | date_time of HTTP request                                    | date
+  # %f   | frontend_name_transport                                      | string
+  # %b   | backend_name                                                 | string
+  # %s   | server_name                                                  | string
+  # %TR  | time to receive the full request from 1st byte               | numeric
+  # %Tw  | total time spent in the queues waiting for a connection slot | numeric
+  # %Tc  | total time to establish the TCP connection to the server     | numeric
+  # %Tr  | Tr (response time)                                           | numeric
+  # %Ta  | Active time of the request (from TR to end)                  | numeric
+  # %ST  | status_code                                                  | numeric
+  # %B   | bytes_read           (from server to client)                 | numeric
+  # %ac  | actconn                                                      | numeric
+  # %fc  | feconn     (frontend concurrent connections)                 | numeric
+  # %bc  | beconn      (backend concurrent connections)                 | numeric
+  # %sc  | srv_conn     (server concurrent connections)                 | numeric
+  # %ts  | termination_state                                            | string
+  # %sq  | srv_queue                                                    | numeric
+  # %bq  | backend_queue                                                | numeric
+  # %r   | http_request                                                 | string
+  # %hrl | captured_request_headers CLF style                           | string list
+  log-format "hap-logs,%ci:%cp,%tr,%f,%b,%s,%TR,%Tw,%Tc,%Tr,%Ta,%ST,%B,%ac,%fc,%bc,%sc,%ts,%sq,%bq,%{+Q}r,%hr"
+  errorfile 400 /etc/haproxy/errors/400.http
+  errorfile 403 /etc/haproxy/errors/403.http
+  errorfile 408 /etc/haproxy/errors/408.http
+  errorfile 500 /etc/haproxy/errors/500.http
+  errorfile 502 /etc/haproxy/errors/502.http
+  errorfile 503 /etc/haproxy/errors/503.http
+  errorfile 504 /etc/haproxy/errors/504.http
+
+listen stats
+  bind *:8080 ssl crt /etc/haproxy/certs/swiggy-wildcard-2020to2022.pem no-sslv3 no-tls-tickets ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH
+  mode http
+  stats enable
+  stats uri /foodie?happy
+  stats realm Strictly\ Private
+  stats auth gourmet:D3li!&ci0u5
+  stats admin if TRUE
+
+listen stats-prometheus
+  bind *:8090
+  mode http
+  stats enable
+  stats uri /status
+
+resolvers dns-1
+  nameserver public-1  8.8.8.8:53
+  hold valid 1s
+
+resolvers dns-private
+  nameserver public-1  172.31.0.2:53
+  accepted_payload_size 8192
+  hold valid 1s
+
+
+listen app-https-for-external-waf
+  http-response set-header Strict-Transport-Security max-age=31536000;\ includeSubdomains;\ preload
+  bind *:8443 ssl crt /etc/haproxy/certs/swiggy-wildcard-2020to2022.pem alpn h2,http/1.1 no-sslv3 no-tls-tickets ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH
+  option http-server-close
+  timeout http-keep-alive 20s
+  maxconn 400000
+  server __app-https 127.0.1.81:8000 check maxconn 400000 send-proxy
+
+listen app-https
+  http-response set-header Strict-Transport-Security max-age=31536000;\ includeSubdomains;\ preload
+  bind *:443 ssl crt /etc/haproxy/certs/swiggy-wildcard-2020to2022.pem alpn h2,http/1.1 no-sslv3 no-tls-tickets ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH
+  option httpclose
+  maxconn 400000
+  server __app-https 127.0.1.81:8000 check maxconn 400000 send-proxy
+
+backend edge-throttle
+  stick-table type string len 128 size 1m expire 1440m store http_req_rate(1m)
+
+backend path-metrics
+  stick-table type string len 128 size 100 expire 1440m store http_req_rate(1m)
+
+frontend __app-https
+  bind 127.0.1.81:8000 accept-proxy
+  bind *:9000
+  
+  compression algo gzip
+  compression type application/json
+
+  # ACL to Control Internal and External Host Headers
+  acl internal-host hdr(host) -i app.swiggyint.in
+  acl internal-host hdr(host) -i app.swiggyops.de
+  acl external-host hdr(host) -i app.swiggy.com
+  acl external-host hdr(host) -i chkout.swiggy.com
+  acl external-host hdr(host) -i disc.swiggy.com
+  acl external-host hdr(host) -i app2.swiggy.com
+  acl external-host hdr(host) -i pos.swiggy.com
+  acl external-host hdr(host) -i profile.swiggy.com
+  acl external-host hdr(host) -i dash.swiggy.com
+  acl external-host hdr(host) -i picker.swiggy.com
+  acl external-host hdr(host) -i fulfillment-middleware.swiggy.com
+  acl internal-host hdr(host) -i api.swiggyint.in
+  acl internal-host hdr(host) -i api.swiggy.com
+  acl internal-host hdr(host) -i api.swiggy.in
+  acl internal-host hdr(host) -i ads.swiggyint.in
+  acl internal-host hdr(host) -i spns.swiggypay.swiggyint.in
+  acl promos-host hdr(host) -i promos-api.swiggy.com
+  use_backend promos_service if promos-host
+  acl external-host hdr(host) -i maps.swiggy.com
+  acl external-host hdr(host) -i klaxon.swiggy.com
+  acl external-host hdr(host) -i apicorp.swiggy.com
+  acl external-host hdr(host) -i surprise.swiggy.com
+  acl external-host hdr(host) -i thefoodclub.swiggy.com
+  acl external-host hdr(host) -i vhc-app.swiggy.com
+  acl external-host hdr(host) -i tfc.swiggy.com
+
+  acl isDataPlatform hdr(host) -i dp-event.swiggypay.swiggyint.in
+  use_backend dataplatform if isDataPlatform
+
+  acl isPaas hdr(host) -i paas.swiggypay.swiggyint.in
+  use_backend paas if isPaas
+
+  acl isNarad hdr(host) -i dp-sms.swiggypay.swiggyint.in
+  use_backend narad if isNarad
+
+  acl api_corp hdr(host) -i apicorp.swiggy.com
+  use_backend api_corp_backend if api_corp
+  
+  # DVO-11808
+  acl surprise_host hdr(host) -i surprise.swiggy.com
+  use_backend surprise_backend if surprise_host
+  
+  # DVO - 11257
+  acl klaxon hdr(host) -i klaxon.swiggy.com
+  acl klaxon_api path -i -m beg /api
+
+  use_backend klaxon_api_cluster if klaxon klaxon_api
+  use_backend klaxon_cluster if klaxon
+  
+  #DVO-13461
+  acl tfc_host hdr(host) -i tfc.swiggy.com
+  use_backend tfc_backend if tfc_host
+
+  # ACL to Control Internal URLs
+  acl internal-urls path_beg -i /api/v1/aggregator/
+  acl internal-urls path -i /api/v1/corporate
+  acl internal-urls path_reg ^/api/v1/cafe/\d+$
+  acl internal-urls path_beg -i /api/v1/collectionsV2
+  acl internal-urls path_beg -i /api/v2/item
+  acl internal-urls path_beg -i /api/presentation/context/
+  acl internal-urls path -i /api/v1/similar_restaurants
+  acl internal-urls path_beg -i /api/v1/priority_slots/
+  acl internal-urls path -i /config/v1/enrichment/upload
+  acl internal-urls path_beg -i /api/v1/carousel/banner
+  acl internal-urls path_beg -i /api/v1/polygon
+  acl internal-urls path -i /api/v1/internal/search
+  acl internal-urls path -i /api/v1/pop/aggregator
+  acl internal-urls path -i /api/v1/pop/restaurants/items
+  acl internal-urls path_beg -i /api/v1/ab/catalog
+  acl internal-urls path_beg -i /api/v1/restaurants/area
+  acl internal-urls path_beg -i /api/v1/ads
+  acl internal-urls path_beg -i /api/v1/plan
+  acl internal-urls path_beg -i /api/v1/notify
+  acl internal-urls path_beg -i /api/v1/group
+  acl internal-urls path -i /api/v1/preorder/slot/valid
+  acl internal-urls path -i /api/v2/app/third_party_signup
+  acl internal-urls path -i /api/v1/user/profile_by_admin
+  acl internal-urls path_beg -i /api/v1/users_internal
+  acl internal-urls path_beg -i /api/v1/user/email/verify/
+  acl internal-urls path_beg -i /swiggylytics/dashboard
+  acl internal-urls path -i /api/v1/edit-order/suggestions
+  acl internal-urls path -i /api/v1/ratings/restaurants/[0-9]+/users/[0-9]+
+  acl internal-urls path -i /api/v1/order/last_completed_order
+
+  # ACL to Control External URLs
+  acl external-urls path_beg -i /api/v3/restaurants/
+  acl external-urls path_beg -i /api/v4/restaurants/
+  acl external-urls path_beg -i /api/v4/restaurant/otheroutlets
+  acl external-urls path -i /api/v1/edit-order/menu
+  acl external-urls path -i /api/v1/city/swiggy_assured
+  acl external-urls path_beg -i /api/v4/listing
+  acl external-urls path_beg -i /api/v5/listing
+  acl external-urls path_beg -i /api/v1/home
+  acl external-urls path_beg -i /api/v1/reorder/listing
+  acl external-urls path -i /api/v1/pop/listing
+  acl external-urls path -i /api/v1/cafe/listing
+  acl external-urls path -i /api/v1/corporate/listing
+  acl external-urls path -i /api/v1/takeaway/listing
+  acl external-urls path_beg -i /api/v1/offer
+  acl external-urls path -i /api/v1/track/card
+  acl external-urls path_beg -i /api/v2/collection
+  acl external-urls path -i /api/v1/explore/listing
+  acl external-urls path -i /api/v1/orderable
+  acl external-urls path_beg -i /api/v1/super
+  acl external-urls path -i /api/v1/restaurants/similar
+  acl external-urls path -i /api/v2/search
+  acl external-urls path_beg -i /api/v3/json/search
+  acl external-urls path_beg -i /api/v3/search
+  acl external-urls path -i /api/v1/routing
+  acl external-urls path -i /api/v2.2/search
+  acl external-urls path -i /api/v1/location_based_features
+  acl external-urls path -i /api/v2/app/login
+  acl external-urls path -i /api/v2/app/signup
+  acl external-urls path -i /api/v1/app/login/verify
+  acl external-urls path -i /api/v1/app/login/call_verify
+  acl external-urls path -i /api/v1/app/login/call_authentication
+  acl external-urls path -i /api/v1/app/logout
+  acl external-urls path -i /api/v1/app/login/otpMail
+  acl external-urls path -i /api/v2/app/login_check
+  acl external-urls path -i /api/v2/app/login_via_tid
+  acl external-urls path -i /api/v2/app/set_password
+  acl external-urls path -i /api/v2/app/sms_otp
+  acl external-urls path -i /api/v2/app/call_otp
+  acl external-urls path_beg -i /api/v1/user/mobile/
+  acl external-urls path -i /api/v1/user/email/
+  acl external-urls path -i /api/v1/user/mobile/otpverify
+  acl external-urls path -i /api/v1/user/profile
+  acl external-urls path -i /api/v1/user/favorite
+  acl external-urls path -i /api/v1/user/sm
+  acl external-urls path -i /api/v1/config/settings
+  acl external-urls path -i /api/v1/config/launch
+  acl external-urls path -i /api/v2/settings
+  acl external-urls path -i /api/v1/launch
+  acl external-urls path -i /api/v1/message
+  acl external-urls path -i /api/v1/user/paytmwallet/sso_token
+  acl external-urls path -i /api/v1/user/paytmwallet/link
+  acl external-urls path -i /api/v1/user/paytmwallet/validate
+  acl external-urls path -i /api/v1/user/paytmwallet/delink
+  acl external-urls path -i /api/v1/user/paytmwallet/check_balance
+  acl external-urls path_beg -i /api/paylater
+  acl external-urls path -i /api/v1/mobikwik/wallet/link
+  acl external-urls path -i /api/v1/mobikwik/wallet/validate
+  acl external-urls path -i /api/v1/mobikwik/wallet/delink
+  acl external-urls path -i /api/v1/mobikwik/wallet/sso_token
+  acl external-urls path -i /api/v1/mobikwik/wallet/calculate_checksum
+  acl external-urls path -i /api/v1/freecharge/wallet/link
+  acl external-urls path -i /api/v1/freecharge/wallet/new_user
+  acl external-urls path -i /api/v1/freecharge/wallet/validate
+  acl external-urls path -i /api/v1/freecharge/wallet/delink
+  acl external-urls path -i /api/v1/freecharge/wallet/sso_token
+  acl external-urls path -i /api/v1/freecharge/wallet/login_token
+  acl external-urls path -i /api/v1/help
+  acl external-urls path -i /api/v1/help/recent
+  acl external-urls path -i /api/v1/payment/get_all_payment
+  acl external-urls path -i /api/v1/cards/juspay
+  acl external-urls path -i /api/v1/cards/all
+  acl external-urls path -i /api/address/external/dominos/get_all
+  acl external-urls path -i /api/address/external/dominos/localities
+  acl external-urls path -i /api/address/external/dominos/sub_localities
+  acl external-urls path -i /api/address/external/dominos/save
+  acl external-urls path -i /api/address/external/dominos/delete_address
+  acl external-urls path -i /api/v1/address/all
+  acl external-urls path -i /api/v1/address/new
+  acl external-urls path -i /api/v1/address/update
+  acl external-urls path -i /api/v1/address/delete
+  acl external-urls path -i /api/v1/address/is_address_serviceable
+  acl external-urls path_beg -i /api/v2/ratings
+  acl external-urls path -i /api/v1/coupons
+  acl external-urls path -i /api/v1/order/get
+  acl external-urls path -i /api/v2/order/get
+  acl external-urls path -i /api/v1/order/getSingleOrder
+  acl external-urls path -i /api/v1/order/getMinimalOrderDetails
+  acl external-urls path -i /api/v1/order/track
+  acl external-urls path -i /api/v1/order/trackMinimal
+  acl external-urls path_reg -i /v2/order/[0-9]+/track
+  acl external-urls path_reg -i /v3/order/[0-9]+/track
+  acl external-urls path -i /v2/delivery/track
+  acl external-urls path -i /v3/delivery/track
+  acl external-urls path_beg -i /api/v2/cart/client
+  acl external-urls path -i /api/v1/order/place
+  acl external-urls path -i /api/v1/order/confirm
+  acl external-urls path_beg -i /api/v1/preorder/cancel
+  acl external-urls path_beg -i /api/v1/preorder/slots
+  acl external-urls path -i /api/v1/corporate/authenticate
+  acl external-urls path -i /api/v2/order/place
+  acl external-urls path -i /api/v2/order/confirm
+  acl external-urls path -i /api/v1/banklist/all
+  acl external-urls path -i /api/v1/order/status/update
+  acl external-urls path -i /api/v1/quick-menu/
+  acl external-urls path -i /api/v1/user/profile/update
+  acl external-urls path -i /api/callback/v1/amazonpay
+  acl external-urls path -i /swiggylytics/config
+  acl external-urls path_beg -i /api/v1/pop/cart/client
+  acl external-urls path_beg -i /api/v1/subscription/cart/client
+  acl external-urls path -i /api/v1/order/user/update/check
+  acl external-urls path -i /api/v2/order/user/update/check
+  acl external-urls path -i /api/v1/order/user/update/confirm
+  acl external-urls path_beg -i /api/v1/attribute-details
+  acl external-urls path_beg -i /api/v1/foodcard
+  acl external-urls path -i /api/v1/ratings/order
+  acl external-urls path_beg -i /api/v2/pop/cart
+  acl external-urls path_beg -i /api/v2/pop/address/is_address_serviceable
+  acl external-urls path_beg -i /api/v2/pop/address/add
+  acl external-urls path_beg -i /api/v2/pop/order
+  acl external-urls path_beg -i /gamification/api/v1/get-game
+  acl external-urls path_beg -i /api/v1/picker_service/call_back/exotel
+  acl external-urls path_beg -i /user/v1/transactions/refunds/active/count
+  acl external-urls path_beg -i /user/v1/transactions
+  acl external-urls path_beg -i /api/v1/menu
+  acl external-urls path_beg -i /api/v2/user/profile
+
+  #DVO-8935
+  acl api-internal-host hdr(host) -i api.swiggy.com
+  acl api-internal-urls path_beg -i /api/v1/order/get_order_details
+  http-request deny if api-internal-host api-internal-urls
+
+  # INFR-1947
+  acl external-urls path_beg -i /api/v1/group
+
+  #DVO-1736
+  acl external-urls path_beg -i /api/v1/cafe/order
+
+  acl external-urls path_beg -i /api/payment/phonepe
+
+  # ACL for restaurant Listing
+  acl restaurant-listing path_beg -i /api/v3/restaurants
+  acl restaurant-listing path_beg -i /api/v4/listing
+  acl restaurant-listing path_beg -i /api/v5/listing
+
+  # Define ACL for the URL's that have to be skipped Rate limiting
+  acl skiprate path_beg -i /dummy_skip
+
+  #INFR-1649
+  acl update-profile path -i /api/v1/user/profile/update
+  acl update-profile-method method POST
+  http-request deny if update-profile !update-profile-method
+
+  #SECOPS-930
+  acl metrics-path path -i /metrics
+  http-request deny if metrics-path
+
+  # High Rate URLs
+  acl high-rate path -i /dummy_high_rate
+
+  # Sensitive URLs which we are expecting low traffic
+  acl sensitive-url path -i /dummy_sensitive
+
+  # Allow HAProxy to process the Connection - SecOps
+  tcp-request inspect-delay 10s
+
+  # Capture the Rate Limit Headers and Actual Client IP in Logs - SecOps
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+
+  ### Key urls to monitor and RateLimit for IPL2019 - @rags
+  acl edge-throttle-listing path_beg -i /api/v5/listing
+  acl edge-throttle-track-old path_beg -i /v2/delivery/track
+  acl edge-throttle-track-old path_beg -i /v3/delivery/track
+  acl edge-throttle-track-new path_reg -i /v2/order/[0-9]+/track
+  acl edge-throttle-track-new path_reg -i /v3/order/[0-9]+/track
+  acl edge-throttle-pop-listing path_beg -i /api/v1/pop/listing
+  acl edge-throttle-search path_beg -i /api/v2/search
+  acl edge-throttle-search path_beg -i /api/v2.2/search
+
+  # Path level metrics which are sent to promethues via haproxy-sttable-metrics.sh cronjob
+  http-request track-sc2 path table path-metrics if edge-throttle-listing
+  http-request track-sc2 path table path-metrics if edge-throttle-track-old
+  http-request track-sc2 path table path-metrics if edge-throttle-pop-listing
+  http-request track-sc2 path table path-metrics if edge-throttle-search
+  http-request track-sc2 str("edge_throttle_track_new") table path-metrics if edge-throttle-track-new
+
+  # Note: deny must occure before track below for ratelimiting to work
+  # comment deny for now
+  # http-request deny deny_status 429 if { path,table_http_req_rate(edge-throttle) gt 500 } edge-throttle-listing
+  # http-request deny deny_status 429 if { path,table_http_req_rate(edge-throttle) gt 500 } edge-throttle-track-old
+  # http-request deny deny_status 429 if { path,table_http_req_rate(edge-throttle) gt 500 } edge-throttle-pop-listing
+  # http-request deny deny_status 429 if { path,table_http_req_rate(edge-throttle) gt 500 } edge-throttle-search
+  # http-request deny deny_status 429 if { str("edge_throttle_track_new"),table_http_req_rate(edge-throttle) gt 500 } edge-throttle-track-new
+
+  http-request track-sc1 path table edge-throttle if edge-throttle-listing
+  http-request track-sc1 path table edge-throttle if edge-throttle-track-old
+  http-request track-sc1 path table edge-throttle if edge-throttle-pop-listing
+  http-request track-sc1 path table edge-throttle if edge-throttle-search
+  http-request track-sc1 str("edge_throttle_track_new") table edge-throttle if edge-throttle-track-new
+
+  # Define a table that will store IPs associated with counter - Secops
+  stick-table type ip size 500k expire 30s store conn_cur,conn_rate(3s),http_req_rate(10s),http_err_rate(5s)
+
+  # Enable tracking of src IP in the sticktable - Secops
+  #tcp-request content track-sc0 src
+  #Enabling src tracking based on imperva or not
+  acl imperva src -f /etc/haproxy/security/imperva.lst
+  http-request set-src hdr(X-Forwarded-For) if imperva
+  tcp-request content track-sc0 src if !imperva
+  tcp-request content track-sc0 hdr(X-Forwarded-For) if imperva
+
+  # Reject the new connection if the client already has 30 opened - Secops
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-High-TCP-Conns, if { src_conn_cur ge 175 } external-host !skiprate
+
+  # Reject the new connection if the client has opened more than 30 TCP connections in 3 seconds - Secops
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-High-TCP-Conn-Rate, if { src_conn_rate ge 300 } external-host !skiprate
+
+  # Reject the connection if the client has passed the HTTP error rate ( 5 HTTP Errors in 5 Seconds) - Secops
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-High-HTTP-Err-Rate, if { sc0_http_err_rate() gt 25 } external-host !skiprate
+
+  # Reject the connection if the client has passed the HTTP request rate (45 HTTP Requests in 10 Seconds) - Secops
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-High-HTTP-Req-Rate, if { sc0_http_req_rate() gt 500 } !skiprate external-host !sensitive-url !restaurant-listing
+
+  # Low Rate Control numbers for Sensitive URLs
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-High-HTTP-Req-Rate, if { sc0_http_req_rate() gt 25 } !skiprate external-host sensitive-url !restaurant-listing
+
+  # Low Rate Control numbers for Listing URLs
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]Rate-limit-listing, if { sc0_http_req_rate() gt 75 } !skiprate external-host !sensitive-url restaurant-listing
+
+  #Define Blacklist and Whitelist - SecOps
+  acl blacklist src -f /etc/haproxy/security/blacklist.lst
+  acl whitelist src -f /etc/haproxy/security/whitelist.lst
+  acl upi_whitelist src -f /etc/haproxy/git-config/haproxy-manualscale/default-settings/security/icici-cash-api.lst
+  acl xff_whitelist hdr(X-Forwarded-For) -f /etc/haproxy/security/whitelist.lst
+  acl ibc-network src -f /etc/haproxy/security/ibc-ip.lst
+  acl prod-vpc-network src -f /etc/haproxy/security/internal-vpc.lst
+#  acl fail2ban src -f /tmp/fail2ban.lst
+
+  # Mark HTTP Requests from IPs listed in blacklist.lst using header - SecOps
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]blacklisted, if blacklist
+
+  # Comment Out the below line when we get the new rate controls in Block-Log Mode - SecOps
+  #tcp-request content reject if blacklist
+
+  # Mark HTTP Requests from IPs listed in whitelist.lst using header - SecOps
+  http-request add-header X-Haproxy-ACL %[req.fhdr(X-Haproxy-ACL,-1)]whitelisted, if whitelist
+
+  # Comment Out the below line when we get the new rate controls in Block-Log Mode - SecOps
+  tcp-request connection accept if whitelist
+  tcp-request connection accept if imperva
+#  tcp-request connection reject if fail2ban
+
+  # Finding Bad-Bots at HAProxy Level
+  acl badbots hdr_sub(user-agent) -f /etc/haproxy/security/bad-bots.lst
+  http-request add-header X-Bad-User %[req.fhdr(X-Bad-User,-1)]BadBot, if badbots
+
+  #Finding Scanners ay HAProxy Level
+  acl scanner hdr_sub(user-agent) -f /etc/haproxy/security/scanners.lst
+  http-request add-header X-Bad-User %[req.fhdr(X-Bad-User,-1)]Scanner, if scanner
+
+  # TCP Connection Kickout if Massive Abuser - Manual Update - SECOPS ONLY !
+  acl hardkick src -f /etc/haproxy/security/hardkick.lst
+  tcp-request content reject if hardkick
+  # upi whitelist
+  acl payment-presentation-url path_beg -i /swiggy/payments/callback/v1/axis
+  use_backend payment_presentation_cluster if payment-presentation-url upi_whitelist
+  
+
+  acl vhc-app_host hdr(host) -i vhc-app.swiggy.com
+  use_backend vhc-app_backend if vhc-app_host
+
+  # upi whitelist
+  acl payment-presentation-url path_beg -i /swiggy/payments/callback/v1/axis
+  use_backend payment_presentation_cluster if payment-presentation-url upi_whitelist
+
+  # DVO-1840 : Config Service
+  acl config_service_dashboard_api path_beg -i /swiggylytics/dashboard
+  acl config_service_api path -i /swiggylytics/config
+  use_backend config_service if config_service_api
+  use_backend config_service_dashboard if config_service_dashboard_api whitelist
+
+  # INTERNAL S2S Calls - Skipping Rate-Control and WAF - Start Here
+  use_backend s2s-traffic if internal-host
+  # INTERNAL S2S Calls - Skipping Rate-Control and WAF - End Here
+
+  # The rest of the config follows below as per the original design
+  reqadd X-Forwarded-Proto:\ https
+
+  ### Adding HEALTH CHECK ENDPOINTS for PINGDOM TO MONITOR DATA SERVICES AND CHECKOUT ###
+  acl ds_pingdom_health path -i /api/v1/healthChecker/snd
+  acl checkout_pingdom_health path -i /api/v1/healthChecker
+
+  use_backend new-data-services if ds_pingdom_health whitelist external-host
+  use_backend order_migration_cluster if checkout_pingdom_health whitelist external-host
+
+  use_backend new-data-services if ds_pingdom_health xff_whitelist external-host
+  use_backend order_migration_cluster if checkout_pingdom_health xff_whitelist external-host
+
+  # Allow only Whitelisted IP Address range to access health check URLs
+  http-request deny if ds_pingdom_health !whitelist
+  http-request deny if checkout_pingdom_health !whitelist
+  http-request deny if ds_pingdom_health !external-host
+  http-request deny if checkout_pingdom_health !external-host
+  
+  #DVO-12813
+  acl thefoodclub_host hdr(host) -i thefoodclub.swiggy.com
+  use_backend thefoodclub_cluster if thefoodclub_host
+
+  ### PINGDOM AND ENXTERNAL HEALTH CHECK CONFIGURATION ENDS HERE ###
+
+  # Forwarding the connections to the Rate Limiting Validator after SSL Offloading/ 3rd Umpire - SecOps
+  default_backend rate-limiter-plain
+
+frontend app-internal-http
+  bind *:80
+
+  option httpclose
+  # Capture the Rate Limit Headers and Actual Client IP in Logs - SecOps
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+  capture request header X-haproxy-crs len 256
+
+  # ACL to Control Internal and External Host Headers
+  acl internal-host hdr(host) -i app.swiggyint.in
+  acl internal-host hdr(host) -i app.swiggyops.de
+  acl external-host hdr(host) -i app.swiggy.com
+  acl external-host hdr(host) -i chkout.swiggy.com
+  acl external-host hdr(host) -i disc.swiggy.com
+  acl external-host hdr(host) -i app2.swiggy.com
+  acl external-host hdr(host) -i pos.swiggy.com
+  acl external-host hdr(host) -i profile.swiggy.com
+  acl external-host hdr(host) -i fulfillment-middleware.swiggy.com
+  acl internal-host hdr(host) -i api.swiggyint.in
+  acl internal-host hdr(host) -i api.swiggy.com
+  acl internal-host hdr(host) -i api.swiggy.in
+  acl internal-host hdr(host) -i ads.swiggyint.in
+  acl internal-host hdr(host) -i spns.swiggypay.swiggyint.in
+  acl external-host hdr(host) -i maps.swiggy.com
+  acl external-host hdr(host) -i klaxon.swiggy.com
+  acl external-host hdr(host) -i apicorp.swiggy.com
+  acl external-host hdr(host) -i surprise.swiggy.com
+  acl external-host hdr(host) -i thefoodclub.swiggy.com
+  acl external-host hdr(host) -i vhc-app-admin.swiggy.com
+  acl external-host hdr(host) -i vhc-app.swiggy.com
+  acl external-host hdr(host) -i tfc.swiggy.com
+
+  #DVO-8935
+  acl api-internal-host hdr(host) -i api.swiggy.com
+  acl api-internal-urls path_beg -i /api/v1/order/get_order_details
+  http-request deny if api-internal-host api-internal-urls
+
+  acl isDataPlatform hdr(host) -i dp-event.swiggypay.swiggyint.in
+  use_backend dataplatform if isDataPlatform
+
+  acl isPaas hdr(host) -i paas.swiggypay.swiggyint.in
+  use_backend paas if isPaas
+
+  acl isNarad hdr(host) -i dp-sms.swiggypay.swiggyint.in
+  use_backend narad if isNarad
+
+
+
+  # HTTP Host Based Protection
+  http-request deny if !internal-host !external-host !isDataPlatform  !isPaas !isNarad
+  #INFR-1649
+  acl update-profile path -i /api/v1/user/profile/update
+  acl update-profile-method method POST
+  http-request deny if update-profile !update-profile-method
+
+  # Redirect Traffic to HTTPs if External
+  redirect scheme https code 301 if !{ ssl_fc } external-host
+
+  # Forward Traffic to s2s-traffic if Internal
+  use_backend s2s-traffic if internal-host
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Rate Limiter Frontend for plain/non-ssl traffic - SecOps                                          #
+# Providing a separate loopback IP so that we will have room for more TCP Sockets - SecOps          #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+frontend rate-limiter-plain
+
+  # Allow HAProxy to process the Connection - SecOps
+  tcp-request inspect-delay 10s
+
+  # Removing Sensitive Headers and adding frontend/backend name in headers to easy debugging
+  http-response del-header X-Powered-By
+  http-response del-header X-Pingback
+  http-response del-header Link
+  http-response del-header Server
+
+  bind 127.0.0.80:10080
+
+  # Capture the Rate Limit Headers and Actual Client IP in Logs - SecOps
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+  capture request header X-haproxy-crs len 256
+
+  # Deny Requests for Wordpress Pingback URL
+  acl xmlrpc path_beg -i /xmlrpc
+  acl xmlrpc path_beg -i /xmlrpc.php
+  acl trackback path_beg -i /trackback
+  http-request deny if xmlrpc
+  http-request deny if trackback
+
+  # Define Blacklist and Whitelist - SecOps
+  acl blacklist hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/blacklist.lst
+  acl whitelist hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/whitelist.lst
+  acl internal-vpc hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/internal-vpc.lst
+
+  # Kick-Out Bad-Users with a 403 Error Response which whitelist as an exclusion
+  acl baduser req.fhdr(X-Bad-User) -m found
+  http-request deny if !whitelist baduser
+
+  # Sending 403 Error Response for Blacklisted Clients
+  http-request deny if blacklist
+
+  # Comment Out the below line when we get the new rate controls in Block-Log Mode - SecOps
+  http-request allow if whitelist
+
+  # if previous ACL didn't pass, and IP isn't whitelisted, block the request - SecOps
+  acl whitelisted req.fhdr(X-Haproxy-ACL) -m sub whitelisted
+  acl fail-validation req.fhdr(X-Haproxy-ACL) -m found
+  acl fail-crs-validation req.fhdr(X-haproxy-crs) -m found
+
+  # Comment out the below line when you want Rate Controls in Log-Only Mode - SecOps
+  #http-request deny if !whitelisted fail-validation
+
+  # Comment out the below line when you want Rate Controls in Log-Only Mode - SecOps
+  #http-request deny if !whitelisted fail-crs-validation
+
+  # Remove the X-Haproxy-ACL Header
+  http-request del-header X-Haproxy-ACL
+
+  # Skip WAF if connecting IP Address is from 172.31 range
+  use_backend s2s-traffic if internal-vpc
+
+  #Stopping Request without User Agents
+  acl foundagent req.hdr(User-Agent) -m found
+  http-request deny if !foundagent !whitelist
+
+  # Send help api's to CRM's Cluster
+  acl api_crm_help path_beg -i /api/v2/help
+  acl api_crm_help path_beg -i /api/v3/help
+  use_backend crm_helpcenter_cluster if api_crm_help
+
+  # Adding this temporary to test pop cart in prod.
+  acl pop_cart_api path_beg -i /api/v1/pop/cart
+  use_backend order_migration_cluster if pop_cart_api
+
+  # INFR-1947
+  acl api_group path_beg -i /api/v1/group
+  use_backend order_migration_cluster if api_group
+
+   # DVO-1736
+  acl api_cafe path_beg -i /api/v1/cafe/order
+  use_backend order_migration_cluster if api_cafe
+
+  # DVO-7785
+  acl fulfillment-middleware hdr(host) -i fulfillment-middleware.swiggy.com
+  use_backend fulfillment-middleware_cluster if fulfillment-middleware
+
+  #DVO-18789 dinersone
+  acl dinersone-proxy hdr(host) -i dinersone-proxy.swiggy.com
+  use_backend  dinersone-proxy_backend if dinersone-proxy
+
+  # DVO-7753
+  acl maps-host hdr(host) -i maps.swiggy.com
+  # DVO-7783
+  acl customer_path path_beg -i /customer customer_path
+  use_backend  pings-ingestion_backend if maps-host customer_path
+  # DVO-10643
+  acl movement-ingestion-gateway_path path_beg -i /api/track/movement
+  use_backend  movement-ingestion-gateway_backend if maps-host movement-ingestion-gateway_path
+  # DVO-12460
+  acl maps-middleware path -i /addresses/v1
+  acl maps-middleware path -i /addresses/v1/all
+  acl maps-middleware path -i /addresses/event/v1
+  use_backend maps-middlewarey_backend if maps-middleware maps-host
+  #DVO-14705
+  acl routing-service_path path_beg -i /directions
+  use_backend routing-service_backend if maps-host routing-service_path
+  use_backend maps-host_backend if maps-host
+
+  #CMR-11302
+  acl block_sid hdr(sid) -i mpbd90e3-57a7-43c6-bfba-718bb899ea23
+  http-request deny if block_sid
+
+  # Forward rest of the traffic to WAF
+  default_backend naxsi-waf
+
+
+frontend clean-traffic
+  bind 127.0.1.80:11180
+
+  # disable keepalive for all
+  option httpclose
+
+  # Capture the Rate Limit Headers and Actual Client IP in Logs - SecOps
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+  capture request header X-haproxy-crs len 256
+  capture request header version-code len 5
+
+  # Define ACL based on HTTP Method and reject POST, PUT, DELETE, OPTIONS methods on listing API's for S2S calls also
+  acl listing_v4 path_beg -i /api/v4/listing
+  acl listing_v4 path_beg -i /api/v5/listing
+  acl listing_methods method GET HEAD
+  http-request deny if !listing_methods listing_v4
+
+  # ACL to Control Internal and External Host Headers
+  acl internal-host hdr(host) -i app.swiggyint.in
+  acl external-host hdr(host) -i app.swiggy.com
+  acl external-host hdr(host) -i chkout.swiggy.com
+  acl external-host hdr(host) -i disc.swiggy.com
+  acl external-host hdr(host) -i app2.swiggy.com
+  acl external-host hdr(host) -i pos.swiggy.com
+  acl external-host hdr(host) -i profile.swiggy.com
+  acl external-host hdr(host) -i api.swiggy.com
+  acl external-host hdr(host) -i api.swiggyint.in
+  acl internal-host hdr(host) -i ads.swiggyint.in
+  acl external-host hdr(host) -i dash.swiggy.com
+  acl external-host hdr(host) -i picker.swiggy.com
+  acl internal-host hdr(host) -i spns.swiggypay.swiggyint.in
+  acl external-host hdr(host) -i klaxon.swiggy.com
+  acl external-host hdr(host) -i apicorp.swiggy.com
+  acl external-host hdr(host) -i surprise.swiggy.com
+  acl external-host hdr(host) -i tfc.swiggy.com
+
+  # Internal VPC IPs
+  acl prod-vpc-network src -f /etc/haproxy/security/internal-vpc.lst
+
+  # HTTP Host Based Protection
+  http-request deny if !internal-host !external-host
+
+  # Define Blacklist and Whitelist - SecOps
+  acl blacklist hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/blacklist.lst
+  acl whitelist hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/whitelist.lst
+
+  # Health Check Test from Office VPN
+  acl snd-healthcheck path -i /api/v1/healthChecker/snd
+  http-request deny if snd-healthcheck !whitelist
+  #use_backend data_service_cluster if snd-healthcheck whitelist
+
+  acl checkout-healthcheck path -i /api/v1/healthChecker
+  http-request deny if checkout-healthcheck !whitelist
+  #use_backend order_migration_cluster if checkout-healthcheck whitelist
+
+  # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+  # SecOps Config Ends Here --- The rest of the config follows below as per the original design #
+  # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+
+  # ACL to Control Internal URLs
+  acl internal-urls path_beg -i /api/v1/aggregator/
+  acl internal-urls path -i /api/v1/corporate
+  acl internal-urls path_reg ^/api/v1/cafe/\d+$
+  acl internal-urls path_beg -i /api/v1/collectionsV2
+  acl internal-urls path_beg -i /api/v2/item
+  acl internal-urls path_beg -i /api/presentation/context/
+  acl internal-urls path -i /api/v1/similar_restaurants
+  acl internal-urls path_beg -i /api/v1/priority_slots/
+  acl internal-urls path -i /config/v1/enrichment/upload
+  acl internal-urls path_beg -i /api/v1/carousel/banner
+  acl internal-urls path_beg -i /api/v1/polygon
+  acl internal-urls path -i /api/v1/internal/search
+  acl internal-urls path_beg -i /api/v1/city
+  acl internal-urls path -i /api/v1/preorder/restaurants
+  acl internal-urls path -i /api/v1/preorder/slot/valid
+  acl internal-urls path -i /api/v1/pop/aggregator
+  acl internal-urls path -i /api/v1/pop/restaurants/items
+  acl internal-urls path_beg -i /api/v1/ab/catalog
+  acl internal-urls path_beg -i /api/v1/ads
+  acl internal-urls path_beg -i /api/v1/plan
+  acl internal-urls path_beg -i /api/v1/notify
+  acl internal-urls path_beg -i /api/v1/areas
+  acl internal-urls path_beg -i /api/v1/group
+  acl internal-urls path -i /api/v2/app/third_party_signup
+  acl internal-urls path -i /api/v1/user/profile_by_admin
+  acl internal-urls path_beg -i /api/v1/users_internal
+  acl internal-urls path_beg -i /api/v1/user/email/verify/
+  acl internal-urls path -i /api/v1/edit-order/suggestions
+  acl internal-urls path -i /api/v1/ratings/restaurants/[0-9]+/users/[0-9]+
+  acl internal-urls path -i /api/v1/order/last_completed_order
+
+
+  # ACL to Control External URLs
+  acl external-urls path_beg -i /api/v3/restaurants/
+  acl external-urls path -i /api/v1/edit-order/menu
+  acl external-urls path -i /api/v1/city/swiggy_assured
+  acl external-urls path_beg -i /api/v4/listing
+  acl external-urls path_beg -i /api/v5/listing
+  acl external-urls path_beg -i /api/v1/home
+  acl external-urls path_beg -i /api/v1/reorder/listing
+  acl external-urls path -i /api/v1/restaurants/similar
+  acl external-urls path -i /api/v1/pop/listing
+  acl external-urls path -i /api/v1/cafe/listing
+  acl external-urls path -i /api/v1/corporate/listing
+  acl external-urls path -i /api/v1/takeaway/listing
+  acl external-urls path_beg -i /api/v1/offer
+  acl external-urls path_beg -i /api/v1/track/card
+  acl external-urls path_beg -i /api/v2/collection
+  acl external-urls path -i /api/v1/explore/listing
+  acl external-urls path_beg -i /api/v1/super
+  acl external-urls path -i /api/v2/search
+  acl external-urls path_beg -i /api/v3/json/search
+  acl external-urls path_beg -i /api/v3/search
+  acl external-urls path -i /api/v1/routing
+  acl external-urls path -i /api/v2.2/search
+  acl external-urls path -i /api/v1/orderable
+  acl external-urls path -i /api/v1/takeaway/search
+  acl external-urls path -i /api/v1/location_based_features
+  acl external-urls path -i /api/v2/app/login
+  acl external-urls path -i /api/v2/app/signup
+  acl external-urls path -i /api/v1/app/login/verify
+  acl external-urls path -i /api/v1/app/login/call_verify
+  acl external-urls path -i /api/v1/app/login/call_authentication
+  acl external-urls path -i /api/v1/app/logout
+  acl external-urls path -i /api/v1/app/login/otpMail
+  acl external-urls path -i /api/v2/app/login_check
+  acl external-urls path -i /api/v2/app/login_via_tid
+  acl external-urls path -i /api/v2/app/set_password
+  acl external-urls path -i /api/v2/app/sms_otp
+  acl external-urls path -i /api/v2/app/call_otp
+  acl external-urls path_beg -i /api/v1/user/mobile/
+  acl external-urls path -i /api/v1/user/email/
+  acl external-urls path -i /api/v1/user/mobile/otpverify
+  acl external-urls path -i /api/v1/user/profile
+  acl external-urls path -i /api/v1/user/favorite
+  acl external-urls path -i /api/v1/user/sm
+  acl external-urls path -i /api/v1/config/settings
+  acl external-urls path -i /api/v1/config/launch
+  acl external-urls path -i /api/v2/settings
+  acl external-urls path -i /api/v1/launch
+  acl external-urls path -i /api/v1/message
+  acl external-urls path -i /api/v1/user/paytmwallet/sso_token
+  acl external-urls path -i /api/v1/user/paytmwallet/link
+  acl external-urls path -i /api/v1/user/paytmwallet/validate
+  acl external-urls path -i /api/v1/user/paytmwallet/delink
+  acl external-urls path -i /api/v1/user/paytmwallet/check_balance
+  acl external-urls path_beg -i /api/paylater
+  acl external-urls path -i /api/v1/mobikwik/wallet/link
+  acl external-urls path -i /api/v1/mobikwik/wallet/validate
+  acl external-urls path -i /api/v1/mobikwik/wallet/delink
+  acl external-urls path -i /api/v1/mobikwik/wallet/calculate_checksum
+  acl external-urls path -i /api/v1/mobikwik/wallet/check_balance
+  acl external-urls path -i /api/v1/mobikwik/wallet/sso_token
+  acl external-urls path -i /api/v1/freecharge/wallet/link
+  acl external-urls path -i /api/v1/freecharge/wallet/new_user
+  acl external-urls path -i /api/v1/freecharge/wallet/validate
+  acl external-urls path -i /api/v1/freecharge/wallet/delink
+  acl external-urls path -i /api/v1/freecharge/wallet/sso_token
+  acl external-urls path -i /api/v1/freecharge/wallet/login_token
+  acl external-urls path -i /api/v1/freecharge/wallet/check_balance
+  acl external-urls path_beg -i /api/v1/help
+  acl external-urls path -i /api/v1/payment/get_all_payment
+  acl external-urls path -i /api/v1/cards/juspay
+  acl external-urls path -i /api/v1/cards/all
+  acl external-urls path -i /api/address/external/dominos/get_all
+  acl external-urls path -i /api/address/external/dominos/localities
+  acl external-urls path -i /api/address/external/dominos/sub_localities
+  acl external-urls path -i /api/address/external/dominos/save
+  acl external-urls path -i /api/address/external/dominos/delete_address
+  acl external-urls path -i /api/v1/address/all
+  acl external-urls path -i /api/v1/address/new
+  acl external-urls path -i /api/v1/address/update
+  acl external-urls path -i /api/v1/address/delete
+  acl external-urls path -i /api/v1/address/is_address_serviceable
+  acl external-urls path -i /api/v2/ratings/create
+  acl external-urls path -i /api/v1/coupons
+  acl external-urls path -i /api/v1/order/get
+  acl external-urls path -i /api/v2/order/get
+  acl external-urls path -i /api/v1/order/getSingleOrder
+  acl external-urls path -i /api/v1/order/getMinimalOrderDetails
+  acl external-urls path -i /api/v1/order/track
+  acl external-urls path -i /api/v1/order/trackMinimal
+  acl external-urls path_reg -i /v2/order/[0-9]+/track
+  acl external-urls path_reg -i /v3/order/[0-9]+/track
+  acl external-urls path -i /v2/delivery/track
+  acl external-urls path -i /v3/delivery/track
+  acl external-urls path_beg -i /api/v2/cart/client
+  acl external-urls path -i /api/v1/order/place
+  acl external-urls path -i /api/v1/order/confirm
+  acl external-urls path_beg -i /api/v1/preorder/cancel
+  acl external-urls path_beg -i /api/v1/preorder/slots
+  acl external-urls path -i /api/v1/corporate/authenticate
+  acl external-urls path -i /api/v2/order/place
+  acl external-urls path -i /api/v2/order/confirm
+  acl external-urls path -i /api/v1/order/status/update
+  acl external-urls path -i /api/v1/banklist/all
+  acl external-urls path_beg -i /api/payment/phonepe
+  acl external-urls path -i /api/v1/order/user/update/check
+  acl external-urls path -i /api/v2/order/user/update/check
+  acl external-urls path -i /api/v1/order/user/update/confirm
+  acl external-urls path_beg -i /api/v1/attribute-details
+  acl external-urls path_beg -i /api/v1/foodcard
+  acl external-urls path -i /api/v1/ratings/order
+  acl external-urls path_beg -i /api/v2/pop/cart
+  acl external-urls path_beg -i /api/v2/pop/address/is_address_serviceable
+  acl external-urls path_beg -i /api/v2/pop/address/add
+  acl external-urls path_beg -i /api/v2/pop/order
+  acl external-urls path_beg -i /api/v1/picker_service/call_back/exotel
+  acl external-urls path_beg -i /user/v1/transactions/refunds/active/count
+  acl external-urls path_beg -i /user/v1/transactions
+  acl external-urls path_beg -i /api/v1/menu
+
+  acl pop_v2 path_beg -i /api/v2/pop
+  use_backend pop_v2_cluster if pop_v2
+  
+  #DVO-17658
+  acl disc-host hdr(host) -i disc.swiggy.com
+  acl foundation-gateway-service-path path -i /api/v2/launch
+  use_backend foundation-gateway-service if disc-host foundation-gateway-service-path
+  
+  #DVO-18155
+  acl pos-host hdr(host) -i pos.swiggy.com
+  acl crm-identity-service path_reg -i  ^/chat/v1/conversations/[^/]+/messages$
+  use_backend crm-identity-service_backend if pos-host crm-identity-service
+  
+  #DVO-12647 DVO-13987 DVO-16699
+  acl dash-cart-host hdr(host) -i dash.swiggy.com app2.swiggy.com app-dash.swiggy.com
+  acl dash-cart-path path_reg -i /api/v1/dash/oms/order/\w+/context/\w+$
+  acl dash-cart-path path_reg -i /api/v1/checkout/order$
+  acl dash-cart-path path_reg -i /api/v1/dash/payment/order/\w+$
+  acl dash-cart-path path_reg -i /api/v1/dash/oms/order-job/\w+/status$
+  acl dash-cart-path path_reg -i /api/v1/dash/oms/active-order
+  acl dash-cart-path path_reg -i /api/v1/pudo/checkout/order$
+  acl dash-cart-path path_reg -i /api/v1/custom/checkout/order$
+  acl dash-cart-path path_beg -i /api/v1/pudo/view/apply-coupon/
+  acl dash-cart-path path_beg -i /api/v1/custom/view/apply-coupon/
+  acl dash-cart-path path_beg -i /api/v2/view
+  acl dash-cart-path path_beg -i  /api/v2/view/clear-cart
+  use_backend dash-cart_service if dash-cart-host dash-cart-path
+  
+  # DVO-12169
+  acl app-host hdr(host) -i app.swiggy.com app.swiggyint.in
+  acl banklist-api path_beg -i /api/v1/banklist/list
+  use_backend order_migration_chkout_service if app-host banklist-api
+
+  acl swiggy_assured path_end -i swiggy_assured
+
+  # using kong ext cluster for all dash calls
+  acl dash-host hdr(host) -i dash.swiggy.com
+  #DVO-9785
+  acl order_history_service path_beg -i /api/v1/order-job/
+  acl order_history_service path_beg -i /api/v1/order/history
+  use_backend order-history-rock_backend if dash-host order_history_service
+  #DVO-11461
+  acl dash_data_service path_beg -i /api/v1/dash/serviceable/status
+  use_backend kong_int_cluster if dash-host dash_data_service
+  acl dash_external_payment_api path_beg -i /api/v1/payment/presentation/client/callback/confirmTransaction
+  acl dash_external_payment_api path_beg -i /api/v1/payment/paymentOptions
+  use_backend payment_presentation_service if dash-host dash_external_payment_api
+  
+  #DVO-12379
+  acl dash_timeline_service path_reg -i /api/v1/timeline/internal/orderjob/\w+/active/simple
+  acl dash_timeline_service path_reg -i /api/v1/timeline/orderjob/\w+$
+  acl dash_timeline_service path_reg -i /api/v1/tracking/orderjob/\w+$
+  acl dash_timeline_service path_reg -i /api/v1/timeline/\w+/tracking/[\w-]+$
+  use_backend dash_timeline_cluster if dash-host dash_timeline_service
+  
+  #DVO-14440
+  acl dash-rating-host hdr(host) -i dash.swiggy.com app2.swiggy.com
+  acl dash-rating-path path_beg -i /api/v1/dash/launch
+  acl dash-rating-path path_beg -i /api/v1/dash/rating
+  acl dash-rating-path path_beg -i /api/v1/dash/rating/dismiss
+  acl dash-rating-path path_beg -i /api/v1/daily/rating
+  acl dash-rating-path path_beg -i /api/v1/daily/launch
+  use_backend dash-rating-service if dash-rating-path dash-rating-host
+  
+  #DVO-16350
+  acl dash-order-intervention_path path_beg -i /api/v1/dash/ticket/freshdesk/status/update/callback
+  use_backend dash-order-intervention_cluster if dash-host dash-order-intervention_path
+  use_backend kong_ext_cluster if dash-host
+
+  # DVO-5075: Promos service
+  acl promos-host hdr(host) -i promos-api.swiggy.com
+  use_backend promos_service if promos-host
+
+  acl isDataPlatform hdr(host) -i dp-event.swiggypay.swiggyint.in
+  use_backend dataplatform if isDataPlatform
+
+  acl isPaas hdr(host) -i paas.swiggypay.swiggyint.in
+  use_backend paas if isPaas
+
+  acl isNarad hdr(host) -i dp-sms.swiggypay.swiggyint.in
+  use_backend narad if isNarad
+
+  acl picker-host hdr(host) -i picker.swiggy.com
+  acl dash-picker-path path_beg -i /api/v1/picker_service/call_back/exotel
+  #DVO-14894
+  acl scm-api-gateway path_beg -i /api/v1/tasks
+  acl scm-api-gateway path_beg -i /api/v1/inprogresstasks
+  acl scm-api-gateway path_beg -i /api/v1/task/assign
+  acl scm-api-gateway path_beg -i /api/v1/task/complete
+  #DVO-17109
+  acl scm-api-gateway path_beg -i /api/v1/job
+  acl scm-api-gateway path_beg -i /api/v2/tasks
+  acl scm-api-gateway path_beg -i /api/v1/task/partiallyComplete
+  acl scm-api-gateway path_beg -i /api/v1/pods/skus
+  #DVO-17585
+  acl scm-api-gateway path_beg -i /api/v1/mrpLookup 
+  acl scm-api-gateway path_beg -i /api/v1/location
+  acl scm-api-gateway path_beg -i /api/v1/procuredSkuDetails
+  acl scm-api-gateway path_beg -i /api/v1/podConfig
+  #DVO-18586
+  acl scm-api-gateway path_beg -i /api/v1/skus/info
+  acl scm-api-gateway path_beg -i /api/v1/manager/reviewOrdersCount
+  acl scm-api-gateway path_beg -i /api/v1/manager/reviewOrders
+  acl scm-api-gateway path_beg -i /api/v1/picker/reportItem
+  acl scm-api-gateway path_beg -i /api/v1/picker/reviewOrder
+  acl scm-api-gateway path_beg -i /api/v1/manager/reviewOrder
+
+  use_backend scm-api-gateway_cluster if picker-host scm-api-gateway
+  
+  use_backend dash-picker-service if picker-host dash-picker-path
+  use_backend picker_ext_cluster if picker-host
+
+
+  
+
+  # ACL to Deny Requests to Internal URLs if the IP Address is not whitelisted
+  http-request deny if internal-urls !whitelist !swiggy_assured
+
+  ########## Presentation layer ACLs START HERE ##########
+  acl presentation-url path_beg -i /api/v4/listing
+  acl presentation-url path_beg -i /api/v5/listing
+  acl presentation-url path -i /api/v1/restaurants/similar
+  acl presentation-url path -i /config/v1/enrichment/upload
+  acl presentation-url path -i /api/v1/pop/listing
+  acl presentation-url path -i /api/v1/cafe/listing
+  acl presentation-url path -i /api/v1/corporate/listing
+  acl presentation-url path -i /api/v1/takeaway/listing
+  acl presentation-url path_beg -i /api/v1/offer
+  acl presentation-url path_beg -i /api/v1/track/card
+  acl presentation-url path_beg -i /api/v2/collection
+  acl presentation-url path -i /api/v1/explore/listing
+  acl presentation-url path_beg -i /api/v1/super
+  acl presentation-url path_beg -i /api/v1/home
+  acl presentation-url path_beg -i /api/v1/reorder/listing
+  acl presentation-url path_beg -i /api/v1/landing-page
+  acl presentation-url path_beg -i /api/v1/json/landing-page
+
+
+  # Route all Presentation APIs to presentation-layer backend
+  #
+  use_backend presentation-layer if presentation-url
+  acl api_crm_help path_beg -i /api/v2/help
+  acl api_crm_help path_beg -i /api/v3/help
+  use_backend crm_helpcenter_cluster if api_crm_help
+
+  ########## Presentation layer ACLs END HERE ##########
+
+  ########## Ads Server ACLs START HERE ##########
+  acl adsserver-url path_beg -i /api/v1/ads
+
+  # Route all Ads Server APIs to ads-server backend
+  use_backend ads-server if adsserver-url
+
+  ########## Ads Server ACLs END HERE ##########
+
+
+  ########## Shaktimaan ACLs START HERE ##########
+  acl shaktimaan-url path_beg -i /api/v1/plan
+  acl shaktimaan-url path_beg -i /api/v1/notify
+
+  # Route all Shaktimaan APIs to shaktimaan backend
+  use_backend shaktimaan if shaktimaan-url
+
+  ########## Shaktimaan ACLs END HERE ##########
+
+########## Data Services ACLs START HERE ##########
+  ## New data services cluster
+  # Data apis
+  acl dataservices-url path_beg -i /api/v1/aggregator/
+  acl dataservices-url path -i /api/v1/corporate
+  acl dataservices-url path_reg ^/api/v1/cafe/\d+$
+  acl dataservices-url path_beg -i /api/v1/collectionsV2
+  acl dataservices-url path_beg -i /api/v2/item
+  acl dataservices-url path_beg -i /api/v3/restaurants/
+  acl dataservices-url path -i /api/v2/search
+  acl dataservices-url path_beg -i /api/v3/search
+  acl dataservices-url path_beg -i /api/v3/json/search
+  acl dataservices-url path -i /api/v1/routing
+  acl dataservices-url path -i /api/v2.2/search
+  acl dataservices-url path -i /api/v1/orderable
+  acl dataservices-url path -i /api/v1/takeaway/search
+  acl dataservices-url path -i /api/v1/city/swiggy_assured
+  acl dataservices-url path -i /api/v1/similar_restaurants
+  acl dataservices-url path_beg -i /api/v1/priority_slots/
+  acl dataservices-url path -i /api/v1/pop/aggregator
+  acl dataservices-url path -i /api/v1/pop/restaurants/items
+  acl dataservices-url path -i /api/v1/location_based_features
+  acl dataservices-url path_beg -i /api/v1/restaurants/area
+  acl dataservices-url path_beg -i /api/v1/quick-menu/
+  acl dataservices-url path_beg -i /api/v1/attribute-details
+  acl dataservices-url path -i /api/v1/areas
+  acl dataservices-url path_beg -i /api/v4/restaurants/
+  acl dataservices-url path_beg -i /api/v4/restaurant/otheroutlets
+  acl dataservices-url path -i /api/v1/edit-order/menu
+  acl dataservices-url path_beg -i /api/v1/meals
+
+  # Others
+  acl dataservices-url path -i /api/v1/config/settings
+  acl dataservices-url path -i /api/v1/config/launch
+  acl dataservices-url path -i /api/v2/settings
+  acl dataservices-url path -i /api/v1/launch
+  acl dataservices-url path_beg -i /api/presentation/context/
+  acl dataservices-url path_beg -i /api/v1/city
+
+  # Catalog AB
+  acl dataservices-url path_beg -i /api/v1/ab/catalog
+
+  # Carousels
+  acl dataservices-url path -i /api/v1/carousel/banner
+  acl dataservices-url path_beg -i /api/v1/carousel/banner/
+
+  # Polygon
+  acl dataservices-url path_beg -i /api/v1/polygon
+
+  # Internal Search
+  acl dataservices-url path -i /api/v1/internal/search
+
+  # Messages API
+  acl dataservices-url path -i /api/v1/message
+
+  # PreOrder API
+  acl dataservices-url path -i /api/v1/preorder/restaurants
+  acl dataservices-url path_beg -i /api/v1/preorder/slots
+  acl dataservices-url path -i /api/v1/preorder/slot/valid
+
+  # Cafe API
+  acl dataservices-url path -i /api/v1/corporate/authenticate
+
+  # Edit Order API
+  acl dataservices-url path -i /api/v1/edit-order/suggestions
+
+  # Search APIs
+  acl search-url path -i /api/search/suggest/v1
+
+  # Route all Data Service APIs to new-data-services backend
+  use_backend new-data-services if dataservices-url
+
+  # Route search APIs to search-cluster
+  use_backend search-cluster if search-url
+
+  # Route message APIs to php-cluster
+  #use_backend php-cluster if php-url
+
+  ########## Data Services ACLs END HERE ##########
+
+  ########## User Service ACLs START HERE ##########
+  ## User Service cluster
+
+  # Auth
+  acl userservices-url path -i /api/v2/app/login
+  acl userservices-url path -i /api/v2/app/signup
+  acl userservices-url path -i /api/v1/app/login/verify
+  acl userservices-url path -i /api/v1/app/login/call_verify
+  acl userservices-url path -i /api/v1/app/login/call_authentication
+  acl userservices-url path -i /api/v1/app/logout
+  acl userservices-url path -i /api/v1/app/login/otpMail
+  acl userservices-url path -i /api/v2/app/login_check
+  acl userservices-url path -i /api/v2/app/login_via_tid
+  acl userservices-url path -i /api/v2/app/set_password
+  acl userservices-url path -i /api/v2/app/sms_otp
+  acl userservices-url path -i /api/v2/app/call_otp
+  acl userservices-url path_beg -i /api/v1/user/mobile/
+  acl userservices-url path -i /api/v1/user/email/
+  acl userservices-url path -i /api/v1/user/mobile/otpverify
+  acl userservices-url path -i /api/v2/app/third_party_signup
+  acl userservices-url path_beg -i /api/v1/users_internal
+  acl userservices-url path_beg -i /api/v1/user/email/verify/
+
+  # User
+  acl userservices-url path -i /api/v1/user/profile
+  acl userservices-url path -i /api/v1/user/profile/update
+  acl userservices-url path -i /api/v1/user/profile_by_admin
+  acl userservices-url path -i /api/v1/user/favorite
+  acl userservices-url path -i /api/v1/user/sm
+
+  use_backend user-service if userservices-url
+
+  ########## User Service ACLs END HERE ##########
+
+  ########## CHECKOUT ACLs START HERE ##########
+  ## Old Cart Cluster
+  # Paytm
+  acl old-checkout-url path -i /api/v1/user/paytmwallet/sso_token
+  acl old-checkout-url path -i /api/v1/user/paytmwallet/link
+  acl old-checkout-url path -i /api/v1/user/paytmwallet/validate
+  acl old-checkout-url path -i /api/v1/user/paytmwallet/delink
+  acl old-checkout-url path -i /api/v1/user/paytmwallet/check_balance
+
+  # Mobikwik
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/link
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/validate
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/delink
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/calculate_checksum
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/check_balance
+  acl old-checkout-url path -i /api/v1/mobikwik/wallet/sso_token
+
+  # Freecharge
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/link
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/new_user
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/validate
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/delink
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/login_token
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/check_balance
+  acl old-checkout-url path -i /api/v1/freecharge/wallet/sso_token
+  acl old-checkout-url path -i /api/v1/banklist/all
+
+  # Payment Instruments and Cards
+  acl old-checkout-url path -i /api/v1/cards/juspay
+  acl old-checkout-url path -i /api/v1/cards/all
+
+  # Dominos addresses
+  acl old-checkout-url path -i /api/address/external/dominos/get_all
+  acl old-checkout-url path -i /api/address/external/dominos/localities
+  acl old-checkout-url path -i /api/address/external/dominos/sub_localities
+  acl old-checkout-url path -i /api/address/external/dominos/save
+  acl old-checkout-url path -i /api/address/external/dominos/delete_address
+
+  # INFR-61 Changes
+  acl old-checkout-url path_beg -i /api/v1/swiggy_money/get
+  acl order-external-url path_beg -i /api/v1/swiggy_money/get
+
+  # Swiggy addresses
+  acl order-external-url path -i /api/v1/address/all
+  acl order-external-url path -i /api/v1/address/new
+  acl order-external-url path -i /api/v1/address/update
+  acl order-external-url path -i /api/v1/address/delete
+  acl order-external-url path -i /api/v1/address/is_address_serviceable
+
+
+  # Ratings
+  acl old-checkout-url path_beg -i /api/v2/ratings/restaurant
+
+  # Coupons
+  acl old-checkout-url path -i /api/v1/coupons
+
+
+  # Tracking
+  acl tracking-url path -i /api/v1/order/track
+  acl tracking-url path -i /api/v1/order/trackMinimal
+
+
+  # CRM Tracking
+  acl crm-tracking-url path_reg -i /v2/order/[0-9]+/track
+  acl crm-tracking-url path_reg -i /v3/order/[0-9]+/track
+  acl crm-tracking-url path -i /v2/delivery/track
+  acl crm-tracking-url path -i /v3/delivery/track
+
+  ## New Cart Cluster
+  # Cart calculations
+  acl new-checkout-url path_beg -i /api/v2/cart/client
+  acl new-checkout-url path_beg -i /api/v1/pop/cart/client
+  
+  # Payment Instruments and Cards - chkout
+  acl payment_api path -i /api/v1/payment/get_all_payment
+  use_backend payment_presentation_service if payment_api { hdr(host) -i chkout.swiggy.com }
+  
+  #DVO-17289
+  acl chkout_edit_api path -i /api/v4/order/edit
+  use_backend order_migration_cluster if chkout_edit_api { hdr(host) -i chkout.swiggy.com }
+
+  # Payment Instruments and Cards
+  acl new-checkout-url path -i /api/v1/payment/get_all_payment
+
+  # Order status
+  acl new-checkout-url path -i /api/v1/order/get
+  acl new-checkout-url path -i /api/v2/order/get
+  acl new-checkout-url path -i /api/v1/order/getSingleOrder
+  acl new-checkout-url path -i /api/v1/order/getMinimalOrderDetails
+
+  # Order place and confirm
+  acl new-checkout-url path -i /api/v1/order/place
+  acl new-checkout-url path -i /api/v1/order/confirm
+  acl new-checkout-url path -i /api/v2/order/place
+  acl new-checkout-url path -i /api/v2/order/confirm
+  acl new-checkout-url path -i /api/v1/order/user/update/check
+  acl new-checkout-url path -i /api/v2/order/user/update/check
+  acl new-checkout-url path -i /api/v1/order/user/update/confirm
+
+  # Preorder
+  acl new-checkout-url path_beg -i /api/v1/preorder/cancel
+
+  # Foodcard
+  acl new-checkout-url path_beg -i /api/v1/foodcard
+
+  #Group
+  acl new-checkout-url path_beg -i /api/v1/group
+
+  #cafe
+  acl new-checkout-url path_beg -i /api/v1/cafe/order
+
+  # Help
+  acl new-checkout-url path -i /api/v1/help
+  acl new-checkout-url path -i /api/v1/help/recent
+
+  # Paylater
+  acl new-checkout-url path_beg -i /api/paylater
+  # Phone pe
+  acl new-checkout-url path_beg -i /api/payment/phonepe
+  #amazon
+  acl new-checkout-url path_beg -i /api/callback/v1/amazonpay
+
+  # Order self delivery update
+  acl new-checkout-url path -i /api/v1/order/status/update
+
+  # Subscription
+  acl new-checkout-url path_beg -i /api/v1/subscription/cart/client
+
+  ### Payment-Presentation-URL
+  acl payment-presentation-url path_beg -i /payment/presentation/api/
+  acl payment-presentation-url path_beg -i /swiggy/payments/callback/
+  acl payment-presentation-url path_beg -i /api/v1/card-details
+  acl payment-presentation-url path_beg -i /swiggy/payments/juspay/callback
+  acl payment-presentation-url path_beg -i /swiggy/payments/juspay/upi/callback
+
+  
+  #DVO-6807 Checkout URLs. Routing below Paths to Kong with changed host header(checkout-service.swiggy.prod)
+  acl chkout-host hdr(host) -i chkout.swiggy.com
+  acl new-checkout-url-kong path -i /api/v1/payment/balanceSummary
+  acl new-checkout-url-kong path_beg -i /checkout-service/external/order
+  acl new-checkout-url-kong path -i /api/v1/banklist/list
+
+  #DVO-7042 DVO-15803
+  acl new-checkout-url-kong path -i /api/v3/cart/client
+  acl new-checkout-url-kong path -i /api/v1/request/register/post_order_tip
+
+  # Route all new payment APIs to payment_presentation_cluster backend
+  use_backend payment_presentation_cluster if payment-presentation-url
+
+  # Route all old checkout APIs to order-new-cluster backend
+  use_backend order_migration_cluster if old-checkout-url
+
+  # Route all new checkout APIs to order-new-cluster backend
+  use_backend order_migration_cluster if new-checkout-url
+
+  # Route all external address (dominos) APIs to order_migration_cluster backend
+  use_backend order_migration_cluster if order-external-url
+
+  # Route all tracking APIs to order_migration_track_cluster backend
+  use_backend order_migration_track_cluster if tracking-url
+  use_backend crm_order_track_cluster if crm-tracking-url
+
+  use_backend order_migration_chkout_service if new-checkout-url-kong chkout-host
+
+  # DVO-9711
+  acl payment-presentation-path path_beg -i /user/v1/transactions/refunds/active/count
+  use_backend payment_presentation_service if payment-presentation-path chkout-host
+
+  # DVO-9755
+  acl payment-presentation-url-new path_beg -i /user/v1/transactions
+  use_backend payment_presentation_service if payment-presentation-url-new chkout-host
+  
+    #DVO-18676
+  acl payment-presentation-service-upi path_beg -i /payment/presentation/v1/swiggyupi/update
+  acl payment-presentation-service-upi path_beg -i /payment/presentation/v1/swiggyupi/delete
+  use_backend payment_presentation_service if payment-presentation-service-upi chkout-host
+
+  #DVO-7271
+  acl isSpns hdr(host) -i spns.swiggypay.swiggyint.in
+  use_backend spns if isSpns
+
+  ########## CHECKOUT ACLs END HERE ##########
+  #acl imperva hdr(X-Forwarded-For) -f /etc/haproxy/security/imperva.lst
+  #Incapsula Return Rules#
+  acl incap_uptime_ua hdr(User-Agent) -i Incapsula\ Uptime\ Monitor
+  use_backend incapsula_200 if external-host incap_uptime_ua #imperva
+
+  acl is_akamai path_reg ^/sure-route.htm$
+  acl is_akamai path_reg ^/favicon.ico$
+  use_backend akamai_health if is_akamai
+
+  # DVO-1840 : Config Service
+  acl config_service_dashboard_api path_beg -i /swiggylytics/dashboard
+  acl config_service_api path -i /swiggylytics/config
+  use_backend config_service if config_service_api
+  use_backend config_service_dashboard if config_service_dashboard_api whitelist
+
+  # DVO-4496 : EDM Feature Release
+  acl edm-ratings path_beg -i /api/v1/ratings/order path_beg -i  /api/v1/ratings/restaurants/[0-9]+/users/[0-9]+ path_beg -i /api/v1/order/last_completed_order
+  acl edm-ratings path_beg -i /api/v2/ratings/create
+  use_backend edm_ratings_cluster if edm-ratings
+
+  #DVO-9946
+  acl gandalf_menu_path path_beg -i /api/v1/menu
+  acl gandalf_menu_path path_beg -i /api/v1/item_collection
+  acl gandalf_menu_path path_beg -i /api/v1/item_collection/json
+  acl gandalf_menu_path path_beg -i /api/v1/layout-section/
+  acl gandalf_menu_path path_beg -i /api/v1/json/layout-section
+  acl gandalf_menu_path path_beg -i /api/v3/collection/restaurant
+  acl gandalf_menu_path path_beg -i /api/v3/collection/restaurant/json
+  acl gandalf_menu_path path_beg -i /api/v3/collection/restaurant/debug
+  #DVO-17330
+  acl gandalf_menu_path path -i /api/v2/home
+  acl gandalf_menu_path path -i /api/v2/home/json
+  #DVO-17331
+  acl gandalf_menu_path path -i /api/v1/food
+  acl gandalf_menu_path path -i /api/v1/json/food
+  #DVO-17330
+  acl gandalf_menu_path path -i /api/v1/json/skeleton
+  acl gandalf_menu_path path -i /api/v1/skeleton
+  #DVO-17667
+  acl gandalf_menu_path path_beg -i /api/v2/menu
+  #DVO-19144
+  acl gandalf_menu_path path -i /api/v2/offer
+  acl gandalf_menu_path path -i /api/v2/offer/json
+  acl gandalf_menu_path path -i /api/v2/offer/debug
+
+  acl gandalf_menu_host hdr(host) -i disc.swiggy.com
+  acl gandalf_menu_host hdr(host) -i app2.swiggy.com
+  use_backend kong_int_cluster if gandalf_menu_path gandalf_menu_host
+  
+  #DVO-12320
+  acl gandalf_sm_profile_path path_beg -i /api/v2/user/profile
+  acl gandalf_sm_profile_path path_beg -i /api/v1/user/notification/preference
+  acl gandalf_sm_profile_host hdr(host) -i profile.swiggy.com
+  use_backend kong_int_cluster if gandalf_sm_profile_path gandalf_sm_profile_host
+  
+  #DVO-15947/15958
+  acl sand-user-service path_beg -i /api/v1/app/logout_from_all
+  acl sand-user-service path_beg -i /api/v1/app/logout_device
+  acl sand-user-service path_beg -i /api/v1/users_internal/logout_from_all
+  acl sand-user-service path_beg -i /api/v1/app/logged_in_devices
+  acl sand-user-service-host hdr(host) -i profile.swiggy.com
+  use_backend kong_int_cluster if sand-user-service sand-user-service-host
+  
+  #DVO-17806
+  acl sand-app-config-service path_beg -i /api/v1/config/preLaunch
+  use_backend kong_int_cluster if sand-app-config-service
+
+
+  ########## Gamification ACLs START HERE ##########
+  acl gamification-url path_beg -i /gamification/api/v1/get-game
+
+  # Route all Gamification APIs to gamification backend
+  use_backend gamification if gamification-url
+
+  ########## Gamification ACLs END HERE ##########
+
+############### BACKENDS START HERE ###############
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Rate Limiter Backend for plain/non-ssl traffic - SecOps                                           #
+# Please note that we are pushing the client IP using "" at this level                              #
+# and have removed the same from the actual backend appnodes as we have added an extra hop - SecOps #
+# Providing a separate loopback IP so that we will have room for more TCP Sockets - SecOps          #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+backend rate-limiter-plain
+  mode http
+  option httpclose
+  server rate-limiter 127.0.0.80:10080
+  option forwardfor if-none
+  http-response add-header X-Data-Origin %b/%s
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# NAXSI-WAF backend for sending the traffic to WAF - SecOps                                         #
+# Providing a separate loopback IP so that we will have room for more TCP Sockets - SecOps          #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+backend naxsi-waf
+  mode http
+  option httpclose
+  # Allow HAProxy to process the Connection - SecOps
+  tcp-response inspect-delay 10s
+  #option httpchk HEAD /errors/health-check HTTP/1.0
+  #Specific WAF checking: a DENY means everything is OK
+  #http-check expect status 403
+  default-server inter 3s rise 2 fall 3
+  #server waf 127.0.100.100:10180 check
+  server bypass-waf 127.0.1.80:11180
+  http-response add-header X-Data-Origin %b/%s
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Forward Requests to "clean-traffic" frontend when connecting IP is from 172.31/16 Net- SecOps     #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+backend s2s-traffic
+  mode http
+  option forwardfor if-none
+  # Allow HAProxy to process the Connection - SecOps
+  tcp-response inspect-delay 10s
+  server  s2s-skipwaf 127.0.1.80:11180
+  http-response add-header X-Data-Origin %b/%s
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Default Backends Follow below:                                                                    #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+## Presentation Layer Backends
+backend presentation-layer
+  mode http
+  option forwardfor
+  # TODO: Add health checks
+  # TODO: balance policy needed?
+  balance roundrobin
+  #server anm-p-gandalf-01 anm-gandalf-1.swiggy.prod:8080 check
+  #server anm-p-gandalf-02 anm-gandalf-2.swiggy.prod:8080 check
+  #server anm-p-gandalf-03 anm-gandalf-3.swiggy.prod:8080 check
+  #server anm-p-gandalf-04 anm-gandalf-4.swiggy.prod:8080 check
+  #server anm-p-gandalf-05 anm-gandalf-5.swiggy.prod:8080 check
+  #server anm-p-gandalf-06 anm-gandalf-6.swiggy.prod:8080 check
+  #server anm-p-gandalf-07 anm-gandalf-7.swiggy.prod:8080 check
+  #server anm-p-gandalf-08 anm-gandalf-8.swiggy.prod:8080 check
+  #server anm-p-gandalf-09 anm-gandalf-9.swiggy.prod:8080 check
+  #server anm-p-gandalf-10 anm-gandalf-10.swiggy.prod:8080 check
+  #server anm-p-gandalf-11 anm-gandalf-11.swiggy.prod:8080 check
+  #server anm-p-gandalf-12 anm-gandalf-12.swiggy.prod:8080 check
+  #server anm-p-gandalf-13 anm-gandalf-13.swiggy.prod:8080 check
+  #server anm-p-gandalf-14 anm-gandalf-14.swiggy.prod:8080 check
+  #server anm-p-gandalf-15 anm-gandalf-15.swiggy.prod:8080 check
+  ##server anm-p-gandalf-16 anm-gandalf-16.swiggy.prod:8080 check
+
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  #server anm-p-gandalf-15 anm-p-gandalf-15.swiggyint.in:8080 check
+
+
+  http-response add-header X-Data-Origin %b/%s
+
+## Ads Server Backends
+backend ads-server
+  mode http
+  #option httpclose
+  option forwardfor
+  #option http-keep-alive
+  # TODO: Add health checks
+  # TODO: balance policy needed?
+  balance roundrobin
+  #server anm-p-ads-server-01 anm-p-ads-server-01.swiggyint.in:8080 weight 10  check
+  #server anm-p-ads-server-02 anm-p-ads-server-02.swiggyint.in:8080 weight 10  check
+  #server anm-p-ads-server-03 anm-p-ads-server-03.swiggyint.in:8080 weight 10  check
+  #server anm-p-ads-server-04 anm-p-ads-server-04.swiggyint.in:8080 weight 10  check
+  #server anm-ads-server-01 anm-ads-server-1.swiggy.prod:8080 weight 10 check
+  #server anm-ads-server-02 anm-ads-server-2.swiggy.prod:8080 weight 10 check
+  #server anm-ads-server-03 anm-ads-server-3.swiggy.prod:8080 weight 10 check
+  #server anm-ads-server-04 anm-ads-server-4.swiggy.prod:8080 weight 10 check
+
+  # kong nodes
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## Shaktimaan Backends
+backend shaktimaan
+  mode http
+  #option httpclose
+  option forwardfor
+  #option http-keep-alive
+  # TODO: Add health checks
+  # TODO: balance policy needed?
+  balance roundrobin
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## User Service Backends
+backend user-service
+  mode http
+  option allbackups
+  option forwardfor
+  default-server inter 3s fall 2 rise 3
+  balance roundrobin
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+
+  #server bac-p-data-service-22 bac-p-data-service-22.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-23 bac-p-data-service-23.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-24 bac-p-data-service-24.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-25 bac-p-data-service-25.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-26 bac-p-data-service-26.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-27 bac-p-data-service-27.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-28 bac-p-data-service-28.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-29 bac-p-data-service-29.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-30 bac-p-data-service-30.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-31 bac-p-data-service-31.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-32 bac-p-data-service-32.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-33 bac-p-data-service-33.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-34 bac-p-data-service-34.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-35 bac-p-data-service-35.swiggyint.in:8080 weight 0 check
+  #server bac-p-data-service-36 bac-p-data-service-36.swiggyint.in:8080 weight 0 check
+  http-response add-header X-Data-Origin %b/%s
+
+## Data Services Backends
+backend new-data-services
+  mode http
+  option forwardfor
+  option httpchk GET /api/sand-controller/ping HTTP/1.0\r\nHost:\ app.swiggy.com\r\nUser-Agent:\ HAProxy-Health-Check
+  http-check expect status 200
+  default-server inter 3s fall 2 rise 3
+  balance roundrobin
+  #server bac-p-data-service-21 bac-p-data-service-21.swiggyint.in:8080 weight 1 check
+  #server bac-p-data-service-22 bac-p-data-service-22.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-23 bac-p-data-service-23.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-24 bac-p-data-service-24.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-25 bac-p-data-service-25.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-26 bac-p-data-service-26.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-27 bac-p-data-service-27.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-28 bac-p-data-service-28.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-29 bac-p-data-service-29.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-30 bac-p-data-service-30.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-31 bac-p-data-service-31.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-32 bac-p-data-service-32.swiggyint.in:8080 weight 2 check
+  #server bac-p-data-service-33 bac-p-data-service-33.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-34 bac-p-data-service-34.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-35 bac-p-data-service-35.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-36 bac-p-data-service-36.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-37 bac-p-data-service-37.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-38 bac-p-data-service-38.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-39 bac-p-data-service-39.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-40 bac-p-data-service-40.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-41 bac-p-data-service-41.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-42 bac-p-data-service-42.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-43 bac-p-data-service-43.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-44 bac-p-data-service-44.swiggyint.in:8080 weight 4 check
+  #server bac-p-data-service-45 bac-p-data-service-45.swiggyint.in:8080 weight 4 check
+
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## Swiggy search backend
+backend search-cluster
+  mode http
+  option forwardfor
+  default-server inter 3s fall 2 rise 3
+  balance roundrobin
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## Checkout Backends
+backend order_migration_cluster
+  mode http
+  option forwardfor
+  balance roundrobin
+  #option httpchk GET /api/v1/healthChecker HTTP/1.0\r\nHost:\ app.swiggy.com\r\nUser-Agent:\ HAProxy-Health-Check
+  #http-check expect rstring "{\"healths\"\:{\"solr\"\:{\"healthy\"\:true}\,\"mysql\"\:{\"healthy\"\:true}\,\"rabbitmq\"\:{\"healthy\"\:true}\,\"redis\"\:{\"healthy\"\:true}}}"
+  default-server inter 3s fall 2 rise 3
+  #server app-kong-1 kong-1.swiggy.prod:80 weight 10 check
+  #server app-kong-2 kong-2.swiggy.prod:80 weight 10 check
+  #server app-kong-3 kong-3.swiggy.prod:80 weight 10 check
+  #server app-kong-4 kong-4.swiggy.prod:80 weight 10 check
+  #server app-kong-5 kong-5.swiggy.prod:80 weight 10 check
+  #server app-kong-6 kong-6.swiggy.prod:80 weight 10 check
+  #server app-kong-7 kong-7.swiggy.prod:80 weight 10 check
+  #server app-kong-8 kong-8.swiggy.prod:80 weight 10 check
+  #server app-kong-9 kong-9.swiggy.prod:80 weight 10 check
+  #server app-kong-10 kong-10.swiggy.prod:80 weight 10 check
+  #server app-kong-11 kong-11.swiggy.prod:80 weight 10 check
+  #server app-kong-12 kong-12.swiggy.prod:80 weight 10 check
+  #server app-kong-13 kong-13.swiggy.prod:80 weight 10 check
+  #server app-kong-15 kong-15.swiggy.prod:80 weight 10 check
+  #server app-kong-16 kong-16.swiggy.prod:80 weight 10 check
+  #server app-kong-17 kong-17.swiggy.prod:80 weight 10 check
+  #server app-kong-18 kong-18.swiggy.prod:80 weight 10 check
+  #server app-kong-19 kong-19.swiggy.prod:80 weight 10 check
+  #server app-kong-20 kong-20.swiggy.prod:80 weight 10 check
+  #server app-kong-21 kong-21.swiggy.prod:80 weight 10 check
+  #server app-kong-22 kong-22.swiggy.prod:80 weight 10 check
+  #server app-kong-23 kong-23.swiggy.prod:80 weight 10 check
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend order_migration_chkout_service
+  mode http
+  option forwardfor
+  balance roundrobin
+  http-request set-header Host checkout-service.swiggy.prod
+  #option httpchk GET /api/v1/healthChecker HTTP/1.0\r\nHost:\ app.swiggy.com\r\nUser-Agent:\ HAProxy-Health-Check
+  #http-check expect rstring "{\"healths\"\:{\"solr\"\:{\"healthy\"\:true}\,\"mysql\"\:{\"healthy\"\:true}\,\"rabbitmq\"\:{\"healthy\"\:true}\,\"redis\"\:{\"healthy\"\:true}}}"
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend payment_presentation_service
+  mode http
+  option forwardfor
+  balance roundrobin
+  http-request set-header Host payment-presentation-service.swiggy.prod
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+
+backend order_migration_track_cluster
+  mode http
+  option forwardfor
+  balance roundrobin
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend crm_order_track_cluster
+  mode http
+  option forwardfor
+  balance roundrobin
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend payment_presentation_cluster
+  mode http
+  option forwardfor
+  balance roundrobin
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## PHP Backends
+#backend php-cluster
+#  mode http
+#  compression algo gzip
+#  compression type text/html text/plain text/css application/json
+#  balance roundrobin
+  # Allow HAProxy to process the Connection - SecOps
+#  tcp-response inspect-delay 10s
+#  #server bac-p-api-server-02  bac-p-api-server-02.swiggyops.de:80 check
+#  server bac-p-api-server-03  bac-p-api-server-03.swiggyops.de:80 check
+#  #server bac-p-api-server-04  172.31.27.252:80 check
+#  http-response add-header X-Data-Origin %b/%s
+
+backend crm_helpcenter_cluster
+  mode http
+  #option abortonclose
+  option http-server-close
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host post-order-services.production.singapore
+  server post-order-services-rock-1 post-order-services.production.singapore:80 check resolvers dns-private
+  server post-order-services-rock-2 post-order-services.production.singapore:80 check resolvers dns-private
+  server post-order-services-rock-3 post-order-services.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend kong_ext_cluster
+  mode http
+  option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  #server kong-ext-1 kong-ext-1.swiggy.prod:80 check weight 100
+  #server kong-ext-2 kong-ext-2.swiggy.prod:80 check weight 100
+  server kong-ext-4 kong-ext-4.swiggy.prod:80 check weight 100
+  server kong-ext-5 kong-ext-5.swiggy.prod:80 check weight 100
+  #server kong-ext-3 kong-ext-3.swiggy.prod:80 check weight 100
+  http-response add-header X-Data-Origin %b/%s
+
+backend picker_ext_cluster
+  mode http
+  #option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dash-picker-front.swiggy.prod
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  
+backend dash-rating-service
+  mode http
+  option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dash-rating-service.production.singapore
+  server dash-rating-service-1 dash-rating-service.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-rating-service-2 dash-rating-service.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-rating-service-3 dash-rating-service.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend kong_int_cluster
+  mode http
+  option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend config_service
+  mode http
+  #option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+
+  http-response add-header X-Data-Origin %b/%s
+
+backend config_service_dashboard
+  mode http
+  #option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend edm_ratings_cluster
+  mode http
+  option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host ratings-service.production.singapore
+  server edm-ratings-1 ratings-service.production.singapore:80 check resolvers dns-private
+  server edm-ratings-2 ratings-service.production.singapore:80 check resolvers dns-private
+  server edm-ratings-3 ratings-service.production.singapore:80 check resolvers dns-private
+  server edm-ratings-4 ratings-service.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend pop_v2_cluster
+  mode http
+  option abortonclose
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host chkout.swiggy.com
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+## Gamification Backends
+backend gamification
+  mode http
+  option abortonclose
+  option httpclose
+  option http-server-close
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host gamification.production.singapore
+  server gamification-1 gamification.production.singapore:80 check resolvers dns-private
+  server gamification-2 gamification.production.singapore:80 check resolvers dns-private
+  server gamification-3 gamification.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend promos_service
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host promos-api.swiggy.com
+  server promos-1  172.31.43.3:8080 weight 20 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dataplatform
+  balance roundrobin
+  server dataplatform dp-event-collector.swiggyint.in:80 check resolvers dns-private check inter 1000
+
+backend spns
+  mode http
+  option forwardfor
+  balance roundrobin
+  http-request set-header Host spns.swiggy.prod
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+
+backend paas
+  balance roundrobin
+  http-request set-header Host paas.swiggy.prod
+  server paas-1 paas.swiggy.prod:80 check resolvers dns-private
+  server paas-2 paas.swiggy.prod:80 check resolvers dns-private
+  server paas-3 paas.swiggy.prod:80 check resolvers dns-private
+
+backend narad
+  balance roundrobin
+  http-request set-header Host dp-notification.swiggyint.in
+  server narad dp-notification.swiggyint.in:80 check resolvers dns-private
+
+backend fulfillment-middleware_cluster
+  mode http
+  option abortonclose
+  option httpclose
+  option http-server-close
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host fulfillment-middleware.production.singapore
+  server fulfillment-middleware fulfillment-middleware.production.singapore:80 check resolvers dns-private
+
+backend incapsula_200
+  mode http
+  errorfile 503 /etc/200response.http
+
+backend akamai_health
+  balance roundrobin
+  server bp 172.31.3.39:80 check
+
+backend maps-host_backend
+  mode http
+  option abortonclose
+  option httpclose
+  option forwardfor
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host address-recommendations.production.singapore
+  server gda-txn-dashboard-1 address-recommendations.production.singapore:80 check resolvers dns-private
+  server gda-txn-dashboard-2 address-recommendations.production.singapore:80 check resolvers dns-private
+  server gda-txn-dashboard-3 address-recommendations.production.singapore:80 check resolvers dns-private
+
+backend dash-picker-service
+  mode http
+  option forwardfor
+  balance roundrobin
+  http-request set-header Host dash-picker-service.swiggy.prod
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+
+backend pings-ingestion_backend
+  mode http
+  option abortonclose
+  option httpclose
+  option http-server-close
+  default-server inter 3s fall 2 rise 3
+  reqrep ^([^\ ]*\ /)customer[/]?(.*)     \1\2
+  http-request set-header Host pings-ingestion.production.singapore
+  server pings-ingestion-1 pings-ingestion.production.singapore:80 check resolvers dns-private
+  server pings-ingestion-2 pings-ingestion.production.singapore:80 check resolvers dns-private
+  server pings-ingestion-3 pings-ingestion.production.singapore:80 check resolvers dns-private
+
+backend  movement-ingestion-gateway_backend
+  mode http
+  option abortonclose
+  option httpclose
+  option http-server-close
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host movement-ingestion-gateway.production.singapore
+  server movement-ingestion-gateway-1 movement-ingestion-gateway.production.singapore:80 check resolvers dns-private
+  server movement-ingestion-gateway-2 movement-ingestion-gateway.production.singapore:80 check resolvers dns-private
+  server movement-ingestion-gateway-3 movement-ingestion-gateway.production.singapore:80 check resolvers dns-private
+
+backend klaxon_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host swiss-klaxon-ui.production.singapore
+  server klaxon-1 swiss-klaxon-ui.production.singapore:80 weight 100 check resolvers dns-private
+  server klaxon-2 swiss-klaxon-ui.production.singapore:80 weight 100 check resolvers dns-private
+  server klaxon-3 swiss-klaxon-ui.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend klaxon_api_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host swiss-klaxon.production.singapore
+  server klaxon-1 swiss-klaxon.production.singapore:80 weight 100 check resolvers dns-private
+  server klaxon-2 swiss-klaxon.production.singapore:80 weight 100 check resolvers dns-private
+  server klaxon-3 swiss-klaxon.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+    
+backend api_corp_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host swiggy-corp-backend.production.singapore
+  server swiggy-corp-1 swiggy-corp-backend.production.singapore:80 weight 100 check resolvers dns-private
+  server swiggy-corp-2 swiggy-corp-backend.production.singapore:80 weight 100 check resolvers dns-private
+  server swiggy-corp-3 swiggy-corp-backend.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+    
+backend surprise_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host swiggycorp-ui-ui-cont.production.singapore
+  server swiggycorp-ui-1 swiggycorp-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  server swiggycorp-ui-2 swiggycorp-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  server swiggycorp-ui-3 swiggycorp-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend dash_timeline_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dash-timeline-service.production.singapore
+  server dash-timeline-1 dash-timeline-service.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-timeline-2 dash-timeline-service.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-timeline-3 dash-timeline-service.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend maps-middlewarey_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host maps-middleware.production.singapore
+  server maps-middleware-1 maps-middleware.production.singapore:80 weight 100 check resolvers dns-private
+  server maps-middleware-2 maps-middleware.production.singapore:80 weight 100 check resolvers dns-private
+  server maps-middleware-3 maps-middleware.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend dash-cart_service
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dash-cart.production.singapore
+  server dash-cart-1 dash-cart.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-cart-2 dash-cart.production.singapore:80 weight 100 check resolvers dns-private
+  server dash-cart-3 dash-cart.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend thefoodclub_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host tfc-backend.production.singapore
+  server thefoodclub-1 tfc-backend.production.singapore:80 weight 100 check resolvers dns-private
+  server thefoodclub-2 tfc-backend.production.singapore:80 weight 100 check resolvers dns-private
+  server thefoodclub-3 tfc-backend.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend vhc-app_backend
+  mode http
+  http-request set-header Host vhc-app.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vhc-app.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vhc-app.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend tfc_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host thefoodclub-ui-ui-cont.production.singapore
+  server thefoodclub-1 thefoodclub-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  server thefoodclub-2 thefoodclub-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  server thefoodclub-3 thefoodclub-ui-ui-cont.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend routing-service_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host routing-service-http.production.singapore
+  server maps-host-1 routing-service-http.production.singapore:80 weight 100 check resolvers dns-private
+  server maps-host-2 routing-service-http.production.singapore:80 weight 100 check resolvers dns-private
+  server maps-host-3 routing-service-http.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend scm-api-gateway_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host scm-api-gateway.production.singapore
+  server scm-api-gateway-1 scm-api-gateway.production.singapore:80 weight 100 check resolvers dns-private
+  server scm-api-gateway-2 scm-api-gateway.production.singapore:80 weight 100 check resolvers dns-private
+  server scm-api-gateway-3 scm-api-gateway.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend dash-order-intervention_cluster
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dash-order-intervention.production.singapore
+  server rock-1 dash-order-intervention.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-2 dash-order-intervention.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-3 dash-order-intervention.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+ backend foundation-gateway-service
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host foundation-gateway-service.production.singapore
+  server rock-1 foundation-gateway-service.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-2 foundation-gateway-service.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-3 foundation-gateway-service.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend crm-identity-service_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host crm-identity-service.production.singapore
+  server rock-1 crm-identity-service.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-2 crm-identity-service.production.singapore:80 weight 100 check resolvers dns-private
+  server rock-3 crm-identity-service.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend  dinersone-proxy_backend 
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  dinersone-proxy.production.singapore
+  server  dinersone-proxy-1  dinersone-proxy.production.singapore:80 check resolvers dns-private
+  server  dinersone-proxy-2  dinersone-proxy.production.singapore:80 check resolvers dns-private
+  server  dinersone-proxy-3  dinersone-proxy.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+  backend order-history-rock_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host order-history-service.production.singapore
+  server order-history-1 order-history-service.production.singapore:80 check resolvers dns-private
+  server order-history-2 order-history-service.production.singapore:80 check resolvers dns-private
+  server order-history-3 order-history-service.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
