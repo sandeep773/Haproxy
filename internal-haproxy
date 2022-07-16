@@ -1,0 +1,3414 @@
+global
+  log 127.0.0.1 local0
+  maxconn 100000
+  ulimit-n 4000033
+  maxpipes 400000
+  nbthread 3
+  cpu-map auto:1/1-3   1-3
+  user haproxy
+  group root
+  tune.ssl.default-dh-param 2048
+  stats socket /var/run/haproxy/haproxy.sock level admin mode 600
+  stats timeout 30s
+  server-state-file server-state-sync
+  server-state-base /var/run/haproxy/
+  daemon
+
+defaults
+  log   global
+  mode  http
+  option  httplog
+  option  http-ignore-probes
+  retries 3
+  option redispatch
+  timeout http-request 120s
+  timeout client-fin  5s
+  timeout connect 3s
+  timeout client  300s
+  timeout server  300s
+  option splice-auto
+  option tcp-smart-connect
+  option tcp-smart-accept
+  maxconn 400000
+
+  # %ci  | client_ip                 (accepted address)                 | IP
+  # %cp  | client_port               (accepted address)                 | numeric
+  # %tr  | date_time of HTTP request                                    | date
+  # %f   | frontend_name_transport                                      | string
+  # %b   | backend_name                                                 | string
+  # %s   | server_name                                                  | string
+  # %TR  | time to receive the full request from 1st byte               | numeric
+  # %Tw  | total time spent in the queues waiting for a connection slot | numeric
+  # %Tc  | total time to establish the TCP connection to the server     | numeric
+  # %Tr  | Tr (response time)                                           | numeric
+  # %Ta  | Active time of the request (from TR to end)                  | numeric
+  # %ST  | status_code                                                  | numeric
+  # %B   | bytes_read           (from server to client)                 | numeric
+  # %ac  | actconn                                                      | numeric
+  # %fc  | feconn     (frontend concurrent connections)                 | numeric
+  # %bc  | beconn      (backend concurrent connections)                 | numeric
+  # %sc  | srv_conn     (server concurrent connections)                 | numeric
+  # %ts  | termination_state                                            | string
+  # %sq  | srv_queue                                                    | numeric
+  # %bq  | backend_queue                                                | numeric
+  # %r   | http_request                                                 | string
+  # %hrl | captured_request_headers CLF style                           | string list
+  log-format "hap-logs,%ci:%cp,%tr,%f,%b,%s,%TR,%Tw,%Tc,%Tr,%Ta,%ST,%B,%ac,%fc,%bc,%sc,%ts,%sq,%bq,%{+Q}r,%hr"
+
+  errorfile 400 /etc/haproxy/errors/400.http
+  errorfile 403 /etc/haproxy/errors/403.http
+  errorfile 408 /etc/haproxy/errors/408.http
+  errorfile 500 /etc/haproxy/errors/500.http
+  errorfile 502 /etc/haproxy/errors/502.http
+  errorfile 503 /etc/haproxy/errors/503.http
+  errorfile 504 /etc/haproxy/errors/504.http
+
+listen stats-prometheus
+  bind *:8090
+  mode http
+  stats enable
+  stats uri /status
+
+resolvers dns-private
+  nameserver public-1 172.31.0.2:53
+  accepted_payload_size 8192
+  hold valid 1s
+
+resolvers dns-1
+  nameserver public-1  8.8.8.8:53
+  hold valid 1s
+
+frontend app-internal-http
+  bind *:9000
+
+  option httpclose
+  # Capture the Rate Limit Headers and Actual Client IP in Logs
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+  capture request header X-haproxy-crs len 256
+
+  acl http req.hdr(X-Forwarded-Proto) http
+  redirect scheme https if http
+
+  acl allow_from_everywhere hdr(X-Forwarded-For) 0.0.0.0/0
+  acl allow_from_everywhere src 0.0.0.0/0
+  acl swiggy_pan_india_ips req.hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/swiggy_pan_india_ips.lst
+  acl dp-ingest_ips hdr(X-Forwarded-For) -f /etc/haproxy/security/dp-ingest-ip.lst
+  acl swiggy_hq_ips req.hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/vpn_ip.lst -f /etc/haproxy/security/nmdc_ip.lst
+  acl swiggy_vpn_ips req.hdr_ip(X-Forwarded-For) -f /etc/haproxy/security/vpn_ip.lst
+  acl gamooga_ips hdr(X-forwarded-For) -f /etc/haproxy/security/gamooga.lst
+  acl jenkins_ip hdr(X-forwarded-For) -f /etc/haproxy/security/jenkins.lst
+  acl github_ip hdr(X-forwarded-For) -f /etc/haproxy/security/github_ips.lst
+  acl jenkins_ci_ip hdr(X-forwarded-For) -f /etc/haproxy/security/jenkin_ci_ips.lst
+  acl whitelist_ips hdr(X-Forwarded-For) -f /etc/haproxy/security/int-whitelist.lst
+  acl github_ip src 192.30.252.0/22 185.199.108.0/22 192.30.252.0/22 185.199.108.0/22 140.82.112.0/20 140.82.112.0/20
+  acl github_ip hdr(X-Forwarded-For) 192.30.252.0/22 185.199.108.0/22 192.30.252.0/22 185.199.108.0/22 140.82.112.0/20 140.82.112.0/20
+  acl ads-external_ip hdr(X-Forwarded-For) -f /etc/haproxy/security/ads-external_ip.lst
+  acl timeline_ip hdr(X-forwarded-For) -f /etc/haproxy/security/timeline_ip.lst
+  acl netscope_ip req.hdr_ip(X-forwarded-For) -f /etc/haproxy/security/netscope_ips.lst
+  acl shared_nexus_ip req.hdr_ip(X-forwarded-For) -f /etc/haproxy/security/shared_nexus.lst
+  acl cms-sandbox_ip req.hdr_ip(X-forwarded-For) -f /etc/haproxy/security/cms-sandbox.lst
+  # CMR-33198 for ci.swiggy.co
+  acl ci_swiggy_co req.hdr_ip(X-forwarded-For) 104.192.143.0/24 52.221.63.6/32 52.76.109.42/32 18.139.7.115/32 54.169.125.40/32 3.0.185.66/32 111.93.189.238/32 182.75.181.110/32 182.71.244.18/32
+
+  # HOST ROUTES
+  acl prometheus-alerts hdr(host) -i prometheus-alerts.swiggyops.de
+  use_backend prometheus-alerts_backend if prometheus-alerts swiggy_hq_ips
+
+  acl priority-dashboard hdr(host) -i prioritydashboard.swiggyops.de
+  use_backend priority-dashboard_backend if priority-dashboard swiggy_pan_india_ips
+
+  acl moneta-dashboard hdr(host) -i delivery-moneta-dashboard-01.swiggyops.de
+  use_backend moneta-dashboard_backend if moneta-dashboard swiggy_pan_india_ips
+
+  acl delivery-rmq hdr(host) -i prod.de.rmq.haproxy.swiggyops.de
+  use_backend delivery-rmq_backend if delivery-rmq swiggy_hq_ips
+
+  acl lms_acl hdr(host) -i lms.swiggyops.de
+  use_backend lms_backend if lms_acl swiggy_pan_india_ips
+
+  acl appsmith-dash hdr(host) -i appsmith.swiggyops.de
+  use_backend appsmith_backend if appsmith-dash swiggy_vpn_ips 
+  
+  acl de-p-explorer-01 hdr(host) -i de-p-explorer-01.swiggyops.de
+  use_backend de-p-explorer-01_backend if de-p-explorer-01 swiggy_pan_india_ips
+
+  acl gamooga-dashboard hdr(host) -i gamooga-injest.swiggyops.de
+  use_backend gamooga-dashboard_backend if gamooga-dashboard swiggy_hq_ips || gamooga-dashboard gamooga_ips
+
+  acl swiggui hdr(host) -i swiggui.swiggyops.de
+  use_backend swiggui_backend if swiggui swiggy_hq_ips
+
+  acl sno-dashboard hdr(host) -i sno-dashboard.swiggyops.de
+  use_backend sno-dashboard_backend if sno-dashboard swiggy_vpn_ips
+
+  acl clm-dashboard hdr(host) -i clm-admin.swiggyops.de
+  use_backend clm-dashboard_backend if clm-dashboard swiggy_pan_india_ips
+
+  acl anobis hdr(host) -i anobis.swiggy.com
+  use_backend anobis_backend if anobis swiggy_pan_india_ips || anobis allow_from_everywhere
+
+  acl sand-rasmalai hdr(host) -i sand-collections-dashboard.swiggyops.de
+  use_backend sand-rasmalai_backend if sand-rasmalai swiggy_hq_ips
+
+  acl sand-p-rasmalai hdr(host) -i sand-p-rasmalai-dashboard.swiggyops.de
+  use_backend sand-p-rasmalai_backend if sand-p-rasmalai swiggy_hq_ips
+
+  acl redash hdr(host) -i dbaccess.swiggyops.de
+  use_backend redash_backend if redash swiggy_pan_india_ips
+
+  acl dp-fie-ingest hdr(host) -i dp-file-ingest.swiggyops.de
+  use_backend dp-fie-ingest_backend if dp-fie-ingest swiggy_hq_ips || dp-fie-ingest dp-ingest_ips
+
+  acl data-approvals hdr(host) -i data-approvals.swiggyops.de
+  use_backend data-approvals_backend if data-approvals swiggy_pan_india_ips
+
+  acl npmjs-hap hdr(host) -i npmjs-hap.swiggyops.de
+  use_backend npmjs-hap_backend if npmjs-hap jenkins_ip || npmjs-hap swiggy_hq_ips
+
+  acl web-watchtower hdr(host) -i web-watchtower.swiggyops.de
+  use_backend web-watchtower_backend if web-watchtower swiggy_hq_ips
+
+  acl on-call hdr(host) -i oncall.swiggyops.de
+  use_backend on-call_backend if on-call swiggy_hq_ips
+
+  acl logman hdr(host) -i logman.swiggyops.de
+  use_backend logman_backend if logman swiggy_hq_ips
+
+  acl shared_nexus hdr(host) -i shr-p-nexus-02-dash.swiggyops.de
+  use_backend shared_nexus_backend if shared_nexus swiggy_hq_ips || shared_nexus jenkins_ci_ip
+
+  acl wallet_acl hdr(host) -i wallet-ops-service.swiggyops.de
+  use_backend wallet_backend if wallet_acl swiggy_pan_india_ips
+
+  acl gda-txn-dashboard hdr(host) -i gda-txn-dashboard.swiggyops.de
+  use_backend gda-txn-dashboard_backend if gda-txn-dashboard swiggy_pan_india_ips
+
+  acl chacha2 hdr(host) -i chacha2.swiggyops.de
+  use_backend chacha2_backend if chacha2 swiggy_pan_india_ips
+
+  acl nexus-registry hdr(host) -i shr-registry.swiggyops.de
+  use_backend shared_nexus-registry_backend if nexus-registry shared_nexus_ip
+
+  acl wallet-dashboard hdr(host) -i wallet-dashboard.swiggyops.de
+  use_backend wallet-dashboard_backend if wallet-dashboard swiggy_pan_india_ips
+
+  acl ads-external hdr(host) -i ads-external.swiggyops.de
+  acl ads-external_path path_beg -i /api/v1/webhook/creative/kubric
+  http-request set-method POST if ads-external
+  use_backend ads-external_backend if ads-external ads-external_path ads-external_ip
+
+  acl de-war-room hdr(host) -i de-tracking-control-room.swiggyops.de
+  use_backend de-war-room_backend if de-war-room swiggy_hq_ips OR de-war-room swiggy_pan_india_ips
+
+  acl de-super-dash hdr(host) -i super-dash.swiggyops.de
+  use_backend super-back_backend if de-super-dash swiggy_hq_ips OR de-super-dash swiggy_pan_india_ips
+
+  acl pangolier-frontend hdr(host) -i pangolier-frontend.swiggyops.de
+  use_backend pangolier-frontend_backend if pangolier-frontend swiggy_hq_ips OR pangolier-frontend swiggy_pan_india_ips
+
+  acl ci-pushgateway hdr(host) -i ci-pushgateway.swiggyops.de
+  use_backend ci-pushgateway_backend if ci-pushgateway jenkins_ci_ip
+
+  acl sand-dd-dashbaord hdr(host) -i sand-collection-dashboard.swiggyops.de
+  use_backend sand-dd-dashboard_backend if sand-dd-dashbaord swiggy_hq_ips
+
+  acl web-webhooks-watchtower hdr(host) -i web-webhooks-watchtower.swiggyops.de
+  acl web-webhooks-watchtower_path path -i /github-webhook/
+  use_backend web-webhooks-watchtower_backend if web-webhooks-watchtower web-webhooks-watchtower_path
+
+  acl dsp-control-tower hdr(host) -i dsp-control-tower.swiggyops.de
+  use_backend dsp-control-tower_backend if dsp-control-tower swiggy_hq_ips
+
+  acl cms-pp-workflow-service hdr(host) -i cms-pp-workflow-service.swiggyops.de
+  use_backend cms-pp-workflow-service_backend if cms-pp-workflow-service whitelist_ips
+
+  acl swiggy_refunds hdr(host) -i r.swig.gy
+  acl swiggy_refunds_path path -i /refunds
+  redirect prefix https://swiggy.onelink.me/eraU?pid=REFUNDS&c=ACTIVE_REFUNDS&af_dp=swiggy://webview?is_external=false&webview_url=https://www.swiggy.com/my-account/payment-history/refunds&af_force_deeplink=true&show_nav_bar=false&is_retargeting=true&af_web_dp=https://www.swiggy.com code 301 if swiggy_refunds swiggy_refunds_path
+
+  acl serviceability_hdr hdr(host) -i serviceability-rule-ui.swiggy.com
+  use_backend serviceability_backend if serviceability_hdr swiggy_pan_india_ips || serviceability_hdr swiggy_vpn_ips
+
+  acl super-back hdr(host) -i super-dash-backend.swiggyops.de
+  use_backend super-back-backend if super-back swiggy_hq_ips || super-back swiggy_pan_india_ips || super-back swiggy_vpn_ips
+
+  acl plops hdr(host) -i plops.swiggyops.de
+  use_backend plops-backend if plops swiggy_hq_ips
+
+  acl gatekeeper_host hdr(host) -i gatekeeper.swiggyops.de
+  use_backend gatekeeper_backend if gatekeeper_host swiggy_hq_ips
+
+  acl timeline_host hdr(host) -i timeline.swiggyops.de
+  use_backend timeline_backend if timeline_host swiggy_vpn_ips || timeline_host timeline_ip
+
+  acl cp_host hdr(host) -i cp.swiggyops.de
+  use_backend cp_backend if cp_host swiggy_vpn_ips
+
+  acl cp_host hdr(host) -i cp.swiggyops.de
+  use_backend cp_backend if cp_host swiggy_vpn_ips
+
+  acl brahma_host hdr(host) -i brahma.swiggyops.de
+  use_backend brahma_backend if brahma_host swiggy_vpn_ips
+
+  acl content_host hdr(host) -i content.swiggyops.de
+  use_backend content_backend if content_host swiggy_vpn_ips
+
+  acl context-ui_host hdr(host) -i context-ui.swiggyops.de
+  use_backend context-ui_backend if context-ui_host swiggy_vpn_ips
+
+  acl map-editor_host hdr(host) -i map-editor.swiggyops.de
+  use_backend map-editor_backend if map-editor_host swiggy_vpn_ips
+  
+  acl mydbops-pmm_host hdr(host) -i mydbops-pmm.swiggyops.de
+  acl mydbops_path path -i /nagios
+  use_backend mydbops_backend if mydbops-pmm_host mydbops_path swiggy_vpn_ips
+  use_backend mydbops-pmm_backend if mydbops-pmm_host swiggy_vpn_ips
+  
+  acl de-warroom_host hdr(host) -i de-warroom.swiggyops.de
+  use_backend de-warroom_backend if de-warroom_host swiggy_vpn_ips
+  
+  acl goproxy_host hdr(host) -i goproxy.swiggyops.de
+  use_backend goproxy_backend if goproxy_host swiggy_vpn_ips
+  
+  #DVO-14873
+  redirect prefix https://lumos.swiggy.co code 301 if { hdr(host) -i khoj.swiggyops.de }
+  acl alation_host hdr(host) -i alation.swiggyops.de lumos.swiggy.co
+  acl qubole_ips req.hdr_ip(X-Forwarded-For) 54.255.169.125/32 52.220.99.188/32
+  use_backend alation_backend if alation_host swiggy_vpn_ips || alation_host swiggy_pan_india_ips || alation_host netscope_ip || alation_host qubole_ips
+  
+  acl vas-admin hdr(host) -i vas-admin.swiggyops.de
+  use_backend vas-admin_backend if vas-admin swiggy_vpn_ips
+
+  acl vas-admin-s hdr(host) -i vas-admin-s.swiggyops.de
+  use_backend vas-admin-s_backend if vas-admin-s swiggy_vpn_ips
+  
+  acl kms-apis hdr(host) -i kms-apis.swiggyops.de
+  use_backend kms-apis_backend if kms-apis swiggy_vpn_ips
+  
+  acl vas-portal-s hdr(host) -i vas-portal-s.swiggyops.de  
+  use_backend vas-portal-s_backend if vas-portal-s swiggy_vpn_ips
+  
+  acl vas-portal hdr(host) -i vas-portal.swiggyops.de
+  use_backend vas-portal_backend if vas-portal swiggy_vpn_ips
+  
+  acl tns-flujo hdr(host) -i tns-flujo-ui.swiggyops.de
+  use_backend tns-flujo_backend if tns-flujo swiggy_hq_ips
+  
+  acl swiggyplus-collection hdr(host) -i swiggyplus-collection.swiggyops.de
+  use_backend swiggyplus-collection_backend if swiggyplus-collection swiggy_hq_ips
+  
+  acl seceng-host hdr(host) -i seceng-apps.swiggyops.de
+  acl seceng-elevator_path_beg path_beg -i /api/elevator/
+  acl seceng-clevertap_path_beg path_beg /api/prod/v1/clevertap/
+  acl seceng-kenscio_path_beg path_beg /api/prod/v1/kenscio/
+  acl seceng-click2dial_path_beg path_beg /api/prod/v1/place-call/
+  acl seceng-data-approvals_path_beg path_beg /api/prod/v1/data-approvals/
+  acl seceng-pii-approvals_path_beg path_beg /api/prod/v1/pii-approval/
+  acl seceng-google-drive_path_beg path_beg /api/prod/v1/googledrive/
+  acl seceng-one-drive_path_beg path_beg /api/prod/v1/onedrive/
+  acl seceng-survey-monkey path_beg /api/prod/v1/survey-monkey/
+  acl seceng-default-api_path_beg path_beg -i /api/
+  use_backend seceng_elevator_backend if seceng-elevator_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_clevertap_backend if seceng-clevertap_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_kenscio_backend if seceng-kenscio_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_click2dial_backend if seceng-click2dial_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_data-approvals_backend if seceng-data-approvals_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_pii-approvals_backend if seceng-pii-approvals_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_google_drive_sink_backend if seceng-google-drive_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_one_drive_sink_backend if seceng-one-drive_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_survey_monkey_backend if seceng-survey-monkey seceng-host swiggy_vpn_ips
+  use_backend seceng_default_api_backend if seceng-default-api_path_beg seceng-host swiggy_vpn_ips
+  use_backend seceng_sentinal_backend if seceng-host swiggy_vpn_ips
+  
+  
+  acl airflow-dp hdr(host) -i airflow-dp.swiggyops.de 
+  use_backend airflow-dp_backend if airflow-dp swiggy_vpn_ips
+  
+  acl airflow-dp-flower hdr(host) -i airflow-dp-flower.swiggyops.de
+  use_backend airflow-dp-flower_backend if airflow-dp-flower swiggy_vpn_ips
+  
+  acl fcp-dashboard-finance hdr(host) -i fcp-dashboard-finance.swiggyops.de
+  use_backend fcp-dashboard-finance_backend if fcp-dashboard-finance swiggy_vpn_ips
+  
+  acl crm-telephony-service hdr(host) -i crm-telephony-service.swiggyops.de
+  acl crm-telephony_path path -i /v1/webhooks/ameyo
+  acl crm-telephony_ip hdr(X-Forwarded-For) -f /etc/haproxy/security/crm-telephony-service.lst
+  use_backend crm-telephony-service_backend if crm-telephony-service crm-telephony_path crm-telephony_ip
+  use_backend crm-telephony-service_backend if crm-telephony-service crm-telephony_path swiggy_vpn_ips
+  
+  acl snd-p-search-v7 hdr(host) -i kibana-sand-p-search-v7.swiggyops.de
+  acl kibana_path path_beg -i /_plugin/kibana/
+  use_backend snd-p-search-v7_backend if snd-p-search-v7 kibana_path swiggy_vpn_ips  
+
+  acl search_debug_dashboard hdr(host) -i search-debug-dashboard.swiggyops.de
+  use_backend search-debug-dashboard_backend if search_debug_dashboard swiggy_vpn_ips
+  
+  acl airflowdp hdr(host) -i airflowdp.swiggy.co
+  use_backend airflowdp_backend if airflowdp swiggy_vpn_ips
+  
+  acl airflowdp-flower hdr(host) -i airflowdp-flower.swiggy.co
+  use_backend airflowdp-flower_backend if airflowdp-flower swiggy_vpn_ips
+  
+  acl airflowdp-grafana hdr(host) -i airflowdp-grafana.swiggy.co
+  use_backend airflowdp-grafana_backend if airflowdp-grafana swiggy_vpn_ips
+
+  acl ci-jenkins hdr(host) -i ci.swiggy.co
+  use_backend ci-jenkins_backend if ci-jenkins swiggy_vpn_ips || ci-jenkins ci_swiggy_co
+  
+  acl de-oneview hdr(host) -i de-oneview.swiggyops.de
+  use_backend de-oneview_backend if de-oneview swiggy_vpn_ips || de-oneview swiggy_pan_india_ips
+  
+  acl vendor-rlm hdr(host) -i rlm.swiggyops.de
+  use_backend vendor-rlm_backend if vendor-rlm swiggy_vpn_ips
+  
+  acl sprinkle_host hdr(host) -i sprinkle.swiggy.co
+  use_backend sprinkle_backend if sprinkle_host
+  
+  acl mim-dashboard_host hdr(host) -i mim-dashboard.swiggyops.de
+  use_backend mim-dashboard_backend if mim-dashboard_host swiggy_vpn_ips
+  
+  acl persona-ingestion hdr(host) -i  persona-ingestion.swiggyops.de
+  use_backend persona-ingestion_backend if persona-ingestion swiggy_vpn_ips
+  
+  acl ads-booking hdr(host) -i  ads-booking.swiggyops.de
+  use_backend ads-booking_backend if ads-booking swiggy_vpn_ips
+  
+  acl xp-server hdr(host) -i xp.swiggy.co
+  use_backend xp-server_backend if xp-server swiggy_vpn_ips
+  
+  acl finance-orchestrator-server hdr(host) -i finance-orchestrator.swiggy.co
+  use_backend finance-orchestrator_backend if finance-orchestrator-server swiggy_vpn_ips
+  
+  acl finance-lassi-server hdr(host) -i finance-lassi.swiggy.co
+  use_backend finance-lassi_backend if finance-lassi-server swiggy_vpn_ips
+  
+  acl cms-rmq hdr(host) -i cms-rmq.swiggy.co
+  use_backend cms-rmq_backend if cms-rmq swiggy_vpn_ips
+  
+  acl gifting hdr(host) -i  gifting.swiggy.co
+  use_backend gifting_backend if gifting swiggy_vpn_ips || gifting swiggy_pan_india_ips
+  
+  acl driver-ops-dashboard hdr(host) -i driver-ops-dashboard.swiggyops.de
+  use_backend driver-ops-dashboard_backend if driver-ops-dashboard swiggy_vpn_ips
+  
+  acl rlm-admin-dashboard hdr(host) -i rlm-admin.swiggyops.de
+  use_backend rlm-dashboard_backend if rlm-admin-dashboard swiggy_pan_india_ips
+  
+  acl search-embedding hdr(host) -i kibana-search-embedding.swiggyops.de
+  use_backend search-embedding_backend if search-embedding swiggy_vpn_ips
+
+  acl anm-ads-search hdr(host) -i kibana-anm-ads-search.swiggyops.de
+  use_backend anm-ads-search_backend if anm-ads-search swiggy_vpn_ips
+
+  acl restaurant-users_host hdr(host) -i restaurant-users.swiggyops.de
+  use_backend restaurant-users_backend if restaurant-users_host swiggy_vpn_ips
+  
+  acl loki-rock_host hdr(host) -i loki-rock.swiggyops.de
+  acl rock_ips req.hdr_ip(X-Forwarded-For) 18.136.214.208/28
+  use_backend loki-rock_backend if loki-rock_host rock_ips
+  
+  acl instamart-scm_host hdr(host) -i instamart-scm.swiggy.in
+  acl instamart-scm_ips req.hdr_ip(X-Forwarded-For) 13.234.218.63/28
+  acl instamart-scm_path path -i /inwarding/api/v1/invoiceDetails
+  use_backend instamart-scm_backend if instamart-scm_host instamart-scm_ips instamart-scm_path || instamart-scm_host swiggy_vpn_ips instamart-scm_path
+  
+  acl ats-dashboard_host hdr(host) -i ats-dashboard.swiggyops.de
+  use_backend ats-dashboard_backend if ats-dashboard_host swiggy_vpn_ips
+  
+  acl rill-stg_host hdr(host) -i rill-stg.swiggy.co
+  acl rill-backend_path path_beg -i /ws/v1/
+  use_backend rill-stg_backend if rill-stg_host swiggy_vpn_ips rill-backend_path
+  use_backend rill-ui_backend if rill-stg_host swiggy_vpn_ips
+
+  acl rill-preprod_host hdr(host) -i rill-pre-prod.swiggy.co
+  acl rill-preprod-backend_path path_beg -i /ws/v1/
+  use_backend rill-preprod_backend if rill-preprod_host swiggy_vpn_ips rill-preprod-backend_path
+  use_backend rill-ui-preprod_backend if rill-preprod_host swiggy_vpn_ips
+
+  
+  acl g-rill_host hdr(host) -i g-rill.swiggyops.de
+  acl g-rill-backend_path path_beg -i /ws/v1/
+  use_backend g-rill-backend if g-rill_host swiggy_vpn_ips g-rill-backend_path
+  use_backend rill-gi_backend if g-rill_host swiggy_vpn_ips
+
+
+  acl pangolier-dashboard hdr(host) -i pangolier-dashboard.swiggyops.de
+  use_backend pangolier-dashboard_backend if pangolier-dashboard swiggy_vpn_ips
+
+  acl vendor-feature-toggle hdr(host) -i feature-toggle.swiggyops.de
+  use_backend vendor-feature-toggle_backend if vendor-feature-toggle swiggy_vpn_ips
+
+  acl picker-admin hdr(host) -i picker-admin.swiggyops.de
+  use_backend picker-admin_backend if picker-admin swiggy_vpn_ips
+
+  acl picker-canary hdr(host) -i picker-admin-canary.swiggyops.de 
+  use_backend picker-canary_backend if picker-canary swiggy_vpn_ips
+
+  acl cms-sandbox hdr(host) -i cms-sandbox-ui.swiggyops.de
+  use_backend cms-sandbox_backend if cms-sandbox swiggy_vpn_ips || cms-sandbox cms-sandbox_ip
+
+  acl cms-sandbox-test hdr(host) -i cms-sandbox-test-ui.swiggyops.de
+  use_backend cms-sandbox-test_backend if cms-sandbox-test swiggy_vpn_ips || cms-sandbox-test cms-sandbox_ip
+
+  acl klaxon hdr(host) -i klaxon.swiggy.in
+  use_backend klaxon_backend if klaxon
+
+  acl dineout-cms hdr(host) -i dineout-cms-dashboard.swiggyops.de
+  use_backend dineout-cms_backend if dineout-cms swiggy_vpn_ips
+
+  acl  dinersone-deals hdr(host) -i dinersone-deals-dashboard.swiggyops.de
+  use_backend dinersone-deals_backend if dinersone-deals swiggy_vpn_ips
+  
+  acl dct-compass hdr(host) -i dct.swiggy.in
+  use_backend dct-compass_backend if dct-compass swiggy_vpn_ips 
+
+  acl connect-admin hdr(host) -i connect-admin-panel.swiggyops.de
+  use_backend connect-admin_backend if connect-admin swiggy_vpn_ips
+
+  acl finance-oneview-new hdr(host) -i finance-oneview.swiggyops.de
+  use_backend finance-oneview-new_backend if finance-oneview-new swiggy_vpn_ips
+ 
+  acl mim-dashboard-v2 hdr(host) -i mim-dashboard-v2.swiggyops.de
+  use_backend mim-dashboard-v2_backend if mim-dashboard-v2 swiggy_vpn_ips
+
+  acl discount-config-dashboard hdr(host) -i discount-config-dashboard.swiggyops.de
+  use_backend discount-config-dashboard_backend if discount-config-dashboard whitelist_ips || discount-config-dashboard swiggy_vpn_ips
+
+
+frontend app-internal-lb-http
+  bind *:9001
+
+  option httpclose
+  # Capture the Rate Limit Headers and Actual Client IP in Logs
+  capture request header Host len 32
+  capture request header X-Forwarded-For len 64
+  capture request header User-Agent len 256
+  capture request header cf-ray len 40
+  capture request header cf-request-id len 64
+  capture request header X-Haproxy-ACL len 256
+  capture request header X-Bad-User len 64
+  capture request header X-City len 64
+  capture request header tid len 40
+  capture request header token len 80
+  capture request header deviceId len 48
+  capture request header swuid len 40
+  capture request header X-haproxy-crs len 256
+
+  acl http req.hdr(X-Forwarded-Proto) http
+  acl ignore-http-redirect hdr(host) -i de-geo.swiggyint.in de-geo.swiggy.in
+  redirect scheme https if http !ignore-http-redirect
+
+  acl flow_dashboard hdr(host) -i flo-ui.swiggyops.de
+  use_backend flow_dashboard_backend if flow_dashboard
+
+  acl swagger_acl hdr(host) -i flo-ui-swagger.swiggyops.de
+  use_backend swagger_backend if swagger_acl
+  
+  acl zeppelin_host hdr(host) -i zeppelin.swiggyops.de
+  use_backend zeppelin_backend if zeppelin_host
+  
+
+  acl flo-3 hdr(host) -i flo.swiggyops.de
+  use_backend flo-3_backend if flo-3
+
+  acl notification hdr(host) -i notification-rill.swiggyops.de
+  use_backend notification_backend if notification
+
+  acl rm1 hdr(host) -i rm1-rill.swiggyops.de
+  use_backend rm1_backend if rm1
+
+  acl nm1 hdr(host) -i nm1-rill.swiggyops.de
+  use_backend nm1_backend if nm1
+
+  acl app1 hdr(host) -i app1-rill.swiggyops.de
+  use_backend app1_backend if app1
+
+  acl 100-90 hdr(host) -i dn-10-10-100-90-rill.swiggyops.de
+  use_backend 100-90_backend if 100-90
+
+  acl 110-90 hdr(host) -i dn-10-10-110-90-rill.swiggyops.de
+  use_backend 110-90_backend if 110-90
+
+  acl rmu1 hdr(host) -i rmu1-rill.swiggyops.de
+  use_backend rmu1_backend if rmu1
+
+  acl nmu1 hdr(host) -i nmu1-rill.swiggyops.de
+  use_backend nmu1_backend if nmu1
+
+  acl 98-127 hdr(host) -i dn-10-10-98-127-rill.swiggyops.de
+  use_backend 98-127_backend if 98-127
+
+  acl 210-184 hdr(host) -i dn-10-10-210-184-rill.swiggyops.de
+  use_backend 210-184_backend if 210-184
+
+  acl 11-28 hdr(host) -i dn-10-10-11-28-rill.swiggyops.de
+  use_backend 11-28_backend if 11-28
+
+  acl 132-22 hdr(host) -i dn-10-10-132-22-rill.swiggyops.de
+  use_backend 132-22_backend if 132-22
+
+  acl 224-145 hdr(host) -i dn-10-10-224-145-rill.swiggyops.de
+  use_backend 224-145_backend if 224-145
+
+  acl 56-65 hdr(host) -i dn-10-10-56-65-rill.swiggyops.de
+  use_backend 56-65_backend if 56-65
+
+  acl 127-166 hdr(host) -i dn-10-10-127-166-rill.swiggyops.de
+  use_backend 127-166_backend if 127-166
+
+  acl 150-102 hdr(host) -i dn-10-10-150-102-rill.swiggyops.de
+  use_backend 150-102_backend if 150-102
+
+  acl 128-84 hdr(host) -i dn-10-10-128-84-rill.swiggyops.de
+  use_backend 128-84_backend if 128-84
+
+  acl 199-154 hdr(host) -i dn-10-10-199-154-rill.swiggyops.de
+  use_backend 199-154_backend if 199-154
+
+  acl 64-138 hdr(host) -i dn-10-10-64-138-rill.swiggyops.de
+  use_backend 64-138_backend if 64-138
+
+  acl 128-71 hdr(host) -i dn-10-10-128-71-rill.swiggyops.de
+  use_backend 128-71_backend if 128-71
+
+  acl 56-3 hdr(host) -i dn-10-10-56-3-rill.swiggyops.de
+  use_backend 56-3_backend if 56-3
+
+  acl druidhistorical_compass hdr(host) -i druidhistorical-compass.swiggyops.de
+  use_backend druidhistorical_compass_backend if druidhistorical_compass
+
+  acl druidcordinator_compass hdr(host) -i druidcordinator-compass.swiggyops.de
+  use_backend druidcordinator_compass_backend if druidcordinator_compass
+
+  acl onboarding_compass hdr(host) -i onboarding-compass.swiggyops.de
+  use_backend onboarding_compass_backend if onboarding_compass
+
+  acl central_kafka hdr(host) -i central-kafka-manager.swiggyops.de
+  use_backend central_kafka_backend if central_kafka
+
+  acl hive hdr(host) -i hive.swiggyops.de
+  use_backend hive_backend if hive
+
+  acl prometheus-alert hdr(host) -i prometheus-rules.swiggyops.de
+  use_backend prometheus-alert_backend if prometheus-alert
+
+  acl checkout-dash hdr(host) -i checkout-dashboard.swiggyops.de
+  use_backend checkout-dash_backend if checkout-dash
+
+  acl data-processing hdr(host) -i dp-dipole-data-processing.swiggyops.de
+  use_backend data-processing_backend if data-processing
+
+  acl vendor-rmq hdr(host) -i vendor-rmq.swiggyops.de
+  use_backend vendor-rmq_backend if vendor-rmq
+
+  acl ff-rmq hdr(host) -i ff-rmq-dashboard.swiggyops.de
+  use_backend ff-rmq_backend if ff-rmq
+
+  acl rmq-com-plt hdr(host) -i rmq-p-commplt-01.swiggyops.de
+  use_backend rmq-com-plt_backend if rmq-com-plt
+
+  acl druidbrokercompass hdr(host) -i druidbrokercompass.swiggyops.de
+  acl druidbrokercompass hdr(host) -i druidbrokercompass.swiggyops.de:80
+  use_backend druidbrokercompass_backend if druidbrokercompass
+
+  acl dp-p-chronos-01 hdr(host) -i dp-p-chronos-01.swiggyops.de
+  use_backend dp-p-chronos-01_backend if dp-p-chronos-01
+
+  acl devops-p-confluent-control-center-6.0 hdr(host) -i confluent-control-center.swiggyops.de
+  use_backend devops-p-confluent-control-center-6.0_backend if devops-p-confluent-control-center-6.0
+
+  acl appu1-rill hdr(host) -i appu1-rill.swiggyops.de
+  use_backend appu1-rill_backend if appu1-rill
+
+  acl vendor-storm hdr(host) -i vendor-storm-ui.swiggyops.de
+  use_backend vendor-storm_backend if vendor-storm
+
+  acl rmu2-rill hdr(host) -i rmu2-rill.swiggyops.de
+  use_backend rmu2-rill_backend if rmu2-rill
+
+  acl nmu2-rill hdr(host) -i nmu2-rill.swiggyops.de
+  use_backend nmu2-rill_backend if nmu2-rill
+
+  acl appu2-rill hdr(host) -i appu2-rill.swiggyops.de
+  use_backend appu2-rill_backend if appu2-rill
+
+  acl vendor-kronos-kibana hdr(host) -i vendor-kronos-kibana.swiggyops.de
+  use_backend vendor-kronos-kibana_backend if vendor-kronos-kibana
+
+  acl rill-166-112 hdr(host) -i dn-10-10-166-112-rill.swiggyops.de
+  use_backend rill-166-112_backend if rill-166-112
+
+  acl npmjs-server hdr(host) -i npmjs.swiggyops.de
+  use_backend npmjs-server_backend if npmjs-server
+
+  acl pricing-dashboard hdr(host) -i pricing-dashboard.swiggyops.de
+  use_backend pricing-dashboard_backend if pricing-dashboard
+
+  acl delivery-sentry-dash hdr(host) -i sentry-delivery.swiggyapp.com
+  use_backend delivery-sentry-dash_backend if delivery-sentry-dash
+
+  acl snd-p-conan hdr(host) -i kibana-sand-p-conan.swiggyops.de
+  acl snd-p-conan-kibana path_beg -i /_plugin/kibana/
+  use_backend snd-p-conan_backend if snd-p-conan snd-p-conan-kibana
+
+  acl snd-p-suggest hdr(host) -i kibana-sand-p-suggest.swiggyops.de
+  acl snd-p-suggest-kibana path_beg -i /_plugin/kibana/
+  use_backend snd-p-suggest_backend if snd-p-suggest snd-p-suggest-kibana
+
+  acl snd-p-suggest-v1 hdr(host) -i kibana-sand-p-suggest-v1.swiggyops.de
+  acl snd-p-suggest-kibana-v1 path_beg -i /_dashboards
+  use_backend snd-p-suggest-v1_backend if snd-p-suggest-v1 snd-p-suggest-kibana-v1
+
+  acl scm-search-es-cluster hdr(host) -i kibana-scm-search-es-cluster.swiggyops.de
+  acl scm-search-es-cluster-kibana path_beg -i /_plugin/kibana/
+  use_backend scm-search-es-cluster_backend if scm-search-es-cluster scm-search-es-cluster-kibana
+
+  acl artemis-dashboard hdr(host) -i kibana-artemis-dashboard.swiggyops.de
+  acl artemis-dashboard-kibana path_beg -i /_dashboards
+  use_backend artemis-dashboard_backend if artemis-dashboard artemis-dashboard-kibana
+
+  acl snd-p-search-v7-analysis hdr(host) -i kibana-snd-p-search-v7-analysis.swiggyops.de
+  acl snd-p-search-v7-analysis-kibana path_beg -i /_plugin/kibana/
+  use_backend snd-p-search-v7-analysis_backend if snd-p-search-v7-analysis snd-p-search-v7-analysis-kibana
+
+  acl dash-data-source hdr(host) -i kibana-dash-data-source.swiggyops.de
+  acl dash-data-source-kibana path_beg -i /_plugin/kibana/
+  use_backend dash-data-source_backend if dash-data-source dash-data-source-kibana
+
+  acl dash-bcl-service-es-cluster hdr(host) -i kibana-dash-bcl-service-es-cluster.swiggyops.de
+  acl dash-bcl-service-es-cluster-kibana path_beg -i /_plugin/kibana/
+  use_backend dash-bcl-service-es-cluster_backend if dash-bcl-service-es-cluster dash-bcl-service-es-cluster-kibana
+
+  acl daily-dash hdr(host) -i daily-dashboard.swiggyops.de
+  use_backend daily-dash_backend if daily-dash
+
+  acl payout-server hdr(host) -i payouts.swiggyops.de
+  use_backend payout-server_backend if payout-server
+
+  acl mercury-rm hdr(host) -i mercury-rm.swiggyops.de
+  use_backend mercury-rm_backend if mercury-rm
+
+  acl mercury-hdfs hdr(host) -i mercury-hdfs.swiggyops.de
+  use_backend mercury-hdfs_backend if mercury-hdfs
+
+  acl mercury-history hdr(host) -i mercury-history.swiggyops.de
+  use_backend mercury-history_backend if mercury-history
+
+  acl mercury-spark-history hdr(host) -i mercury-spark-history.swiggyops.de
+  use_backend mercury-spark-history_backend if mercury-spark-history
+
+  acl mercury-am hdr(host) -i mercury-am.swiggyops.de
+  use_backend mercury-am_backend if mercury-am
+
+  acl auth-consul hdr(host) -i authenticate-consul-ui.swiggyops.de
+  use_backend auth-consul_backend if auth-consul
+
+  acl connect_dashboard hdr(host) -i connect.swiggy.com
+  use_backend connect_cluster if connect_dashboard
+
+  redirect code 301 location https://connect.swiggy.com/login if connect_dashboard
+
+  acl yarn-rm-ui hdr(host) -i yarn-rm-ui.swiggyops.de
+  use_backend yarn-rm-ui_backend if yarn-rm-ui
+
+  acl yarn-am-ui hdr(host) -i yarn-am-ui.swiggyops.de
+  use_backend yarn-am-ui_backend if yarn-am-ui
+
+  acl yarn-nm-ui hdr(host) -i yarn-nm-ui.swiggyops.de
+  use_backend yarn-nm-ui_backend if yarn-nm-ui
+
+  acl yarn-history-ui hdr(host) -i yarn-history-ui.swiggyops.de
+  use_backend yarn-history-ui_backend if yarn-history-ui
+
+  acl hdfs-ui hdr(host) -i hdfs-ui.swiggyops.de
+  use_backend hdfs-ui_backend if hdfs-ui
+
+  acl spark-history hdr(host) -i spark-history.swiggyops.de
+  use_backend spark-history_backend if spark-history
+
+  acl yarn-rm-ui-1 hdr(host) -i yarn-rm-ui-1.swiggyops.de
+  use_backend yarn-rm-ui-1_backend if yarn-rm-ui-1
+
+  acl yarn-am-ui-1 hdr(host) -i yarn-am-ui-1.swiggyops.de
+  use_backend yarn-am-ui-1_backend if yarn-am-ui-1
+
+  acl yarn-nm-ui-1 hdr(host) -i yarn-nm-ui-1.swiggyops.de
+  use_backend yarn-nm-ui-1_backend if yarn-nm-ui-1
+
+  acl yarn-history-ui-1 hdr(host) -i yarn-history-ui-1.swiggyops.de
+  use_backend yarn-history-ui-1_backend if yarn-history-ui-1
+
+  acl hdfs-ui-1 hdr(host) -i hdfs-ui-1.swiggyops.de
+  use_backend hdfs-ui-1_backend if hdfs-ui-1
+
+  acl spark-history-1 hdr(host) -i spark-history-1.swiggyops.de
+  use_backend spark-history-1_backend if spark-history-1
+
+  acl yarn-nm1-ui-1 hdr(host) -i yarn-nm1-ui-1.swiggyops.de
+  use_backend yarn-nm1-ui-1_backend if yarn-nm1-ui-1
+
+  acl yarn-nm2-ui hdr(host) -i yarn-nm2-ui.swiggyops.de
+  use_backend yarn-nm2-ui_backend if yarn-nm2-ui
+
+  acl dns-10-10-227-2-rill hdr(host) -i dns-10-10-227-2-rill.swiggyops.de
+  use_backend dns-10-10-227-2-rill_backend if dns-10-10-227-2-rill
+
+  acl dns-10-10-15-115-rill hdr(host) -i dns-10-10-15-115-rill.swiggyops.de
+  use_backend dns-10-10-15-115-rill_backend if dns-10-10-15-115-rill
+
+  acl dns-10-10-170-126-rill hdr(host) -i dns-10-10-170-126-rill.swiggyops.de
+  use_backend dns-10-10-170-126-rill_backend if dns-10-10-170-126-rill
+
+  acl dns-10-10-104-110-rill hdr(host) -i dns-10-10-104-110-rill.swiggyops.de
+  use_backend dns-10-10-104-110-rill_backend if dns-10-10-104-110-rill
+
+  acl dipole-service hdr(host) -i dipole-service.swiggyops.de
+  use_backend dipole-service_backend if dipole-service
+
+  # acl orisis-npl hdr(host) -i orisis-kibana.swiggyops.de
+  # acl orisis-npl-kibana path_beg -i /_plugin/kibana/
+  # use_backend orisis-npl_backend if orisis-npl orisis-npl-kibana
+
+  acl mercury-nm1 hdr(host) -i mercury-nm1.swiggyops.de
+  use_backend mercury-nm1_backend if mercury-nm1
+
+  acl mercury-nm2 hdr(host) -i mercury-nm2.swiggyops.de
+  use_backend mercury-nm2_backend if mercury-nm2
+
+  acl mercury-nm3 hdr(host) -i mercury-nm3.swiggyops.de
+  use_backend mercury-nm3_backend if mercury-nm3
+
+  acl mercury-nm4 hdr(host) -i mercury-nm4.swiggyops.de
+  use_backend mercury-nm4_backend if mercury-nm4
+
+  acl mercury-nm5 hdr(host) -i mercury-nm5.swiggyops.de
+  use_backend mercury-nm5_backend if mercury-nm5
+
+  acl erd hdr(host) -i erd.swiggyops.de
+  use_backend erd_backend if erd
+
+  acl oneview hdr(host) -i oneview.swiggy.com
+  use_backend oneview_cluster if oneview
+
+  acl payout1-yarnresource hdr(host) -i payout-critical-1-yarnresource.swiggyops.de
+  use_backend payout1-yarnresource_backend if payout1-yarnresource
+
+  acl payout1-application hdr(host) -i payout-critical-1-application.swiggyops.de
+  use_backend payout1-application_backend if payout1-application
+
+  acl payout1-ganglia hdr(host) -i payout-critical-1-ganglia.swiggyops.de
+  use_backend payout1-ganglia_backend if payout1-ganglia
+
+  acl payout1-yarnnode hdr(host) -i payout-critical-1-yarnnode.swiggy.ops.de
+  use_backend payout1-yarnnode_backend if payout1-yarnnode
+
+  acl payout1-spark hdr(host) -i payout-critical-1-spark.swiggyops.de
+  use_backend payout1-spark_backend if payout1-spark
+
+  acl spark-history-dipole hdr(host) -i spark-history-dipole.swiggyops.de
+  use_backend spark-history-dipole_backend if spark-history-dipole
+
+  acl rm-dipole hdr(host) -i rm-dipole.swiggyops.de
+  use_backend rm-dipole_backend if rm-dipole
+
+  acl nm-dipole hdr(host) -i nm-dipole.swiggyops.de
+  use_backend nm-dipole_backend if nm-dipole
+
+  acl livy-dipole hdr(host) -i livy-dipole.swiggyops.de
+  use_backend livy-dipole_backend if livy-dipole
+
+  acl jhs-dipole hdr(host) -i jhs-dipole.swiggyops.de
+  use_backend jhs-dipole_backend if jhs-dipole
+
+  acl am-dipole hdr(host) -i am-dipole.swiggyops.de
+  use_backend am-dipole_backend if am-dipole
+
+  acl dlm-admin hdr(host) -i dlm-admin.swiggyops.de
+  use_backend dlm-admin_backend if dlm-admin
+
+  acl chronosdp hdr(host) -i chronosdp.swiggyops.de
+  use_backend chronosdp_backend if chronosdp
+
+  acl kitchen-tech-rmq-dashboard hdr(host) -i kitchen-tech-rmq-dashboard.swiggyops.de
+  use_backend kitchen-tech-rmq-dashboard_backend if kitchen-tech-rmq-dashboard
+
+  acl partner-prod hdr(host) -i partner-prod-1.swiggyops.de
+  use_backend partner-prod_backend if partner-prod
+
+  acl ug-rill hdr(host) -i ug-rill.swiggyops.de
+  use_backend ug-rill_backend if ug-rill
+
+  acl dp-event-onboard hdr(host) -i dp-event-onboard.swiggyops.de
+  use_backend dp-event-onboard_backend if dp-event-onboard
+
+  acl vendor-portal hdr(host) -i vendor-portal.swiggyops.de
+  use_backend vendor-portal_backend if vendor-portal
+
+  acl servu-rill hdr(host) -i servu-rill.swiggyops.de
+  use_backend servu-rill_backend if servu-rill
+
+  acl cms-menudigitization hdr(host) -i cms-menudigitsation.swiggyops.de
+  use_backend cms-menudigitization_backend if cms-menudigitization
+
+  acl pci-fim-server hdr(host) -i pci-fim-server.swiggyops.de
+  use_backend pci-fim-server_backend if pci-fim-server
+
+  acl serv-rill hdr(host) -i serv-rill.swiggyops.de
+  use_backend serv-rill_backend if serv-rill
+
+  acl de-presto-adhoc-1 hdr(host) -i de-presto-adhoc.swiggyops.de
+  use_backend de-presto-adhoc-1_backend if de-presto-adhoc-1
+
+  acl badges-dashboard hdr(host) -i badges-dashboard.swiggyops.de
+  use_backend badges-dashboard_backend if badges-dashboard
+
+  acl maps-galileo hdr(host) -i maps-galileo.swiggyops.de
+  use_backend maps-galileo_backend if maps-galileo
+
+  acl comm-rmq-dashboard hdr(host) -i comm-rmq-dashboard.swiggyops.de
+  use_backend comm-rmq-dashboard_backend if comm-rmq-dashboard
+
+  acl finance-rmq-dashboard hdr(host) -i finance-rmq-dashboard.swiggyops.de
+  use_backend finance-rmq-dashboard_backend if finance-rmq-dashboard
+
+  acl prod-dexp-rmq hdr(host) -i prod-dexp-rmq-dashboard.swiggyops.de
+  use_backend prod-dexp-rmq_backend if prod-dexp-rmq
+
+  acl oldg-rill hdr(host) -i oldg-rill.swiggyops.de
+  use_backend oldg-rill_backend if oldg-rill
+
+  acl druidcoordinator-uat hdr(host) -i druidcoordinator-uat.swiggyops.de
+  use_backend druidcoordinator-uat_backend if druidcoordinator-uat
+
+  acl druidhistorical-uat hdr(host) -i druidhistorical-uat.swiggyops.de
+  use_backend druidhistorical-uat_backend if druidhistorical-uat
+
+  acl dumbledore hdr(host) -i dumbledore.swiggyops.de
+  use_backend dumbledore_backend if dumbledore
+
+  acl graft-editor hdr(host) -i graft-editor.swiggyops.de
+  use_backend graft-editor_backend if graft-editor
+
+  acl swiggyplus-service hdr(host) -i swiggyplus.swiggyops.de
+  use_backend swiggyplus-service_backend if swiggyplus-service
+
+  acl swiggyplus-collection hdr(host) -i swiggyplus-collection.swiggyops.de
+  use_backend swiggyplus-collection_backend if swiggyplus-collection
+
+  acl swiggyplus-layout hdr(host) -i swiggyplus-layout.swiggyops.de
+  use_backend swiggyplus-layout_backend if swiggyplus-layout
+
+  acl payouts-engine hdr(host) -i payouts-engine.swiggyops.de
+  use_backend payouts-engine_backend if payouts-engine
+
+  acl jenkins-dba hdr(host) -i jenkins-dba.swiggyops.de
+  use_backend jenkins-dba_backend if jenkins-dba
+
+  acl capacity-dashboard-node hdr(host) -i capacity-dashboard-node.swiggyops.de
+  use_backend capacity-dashboard-node_backend if capacity-dashboard-node
+
+  acl osiris-django hdr(host) -i osiris-django.swiggyops.de
+  use_backend osiris-django_backend if osiris-django
+
+  acl checkout-new hdr(host) -i checkout-new-dashboard.swiggyops.de
+  use_backend checkout-new_backend if checkout-new
+
+  acl manual-refund-dashboard hdr(host) -i manual-refund-dashboard.swiggyops.de
+  use_backend manual-refund-dashboard_backend if manual-refund-dashboard
+
+  acl payments-config-dashboard hdr(host) -i payments-config-dashboard.swiggyops.de
+  use_backend payments-config-dashboard_backend if payments-config-dashboard
+
+  acl dp-snowgate hdr(host) -i dp-snowgate.swiggyops.de
+  use_backend dp-snowgate_backend if dp-snowgate
+
+  acl cancellation-ui hdr(host) -i cancellation-ui.swiggyops.de
+  use_backend cancellation-ui_backend if cancellation-ui
+
+  acl flo-ui-production hdr(host) -i flo-ui-production.swiggyops.de
+  use_backend flo-ui-production_backend if flo-ui-production
+
+  acl geoentities-platform hdr(host) -i geoentities-platform.swiggyops.de
+  use_backend geoentities-platform_backend if geoentities-platform
+
+  acl gda-mlm.production hdr(host) -i gda-mlm-production.swiggyops.de
+  use_backend gda-mlm.production_backend if gda-mlm.production
+
+  acl dsp-mlflow hdr(host) -i dsp-mlflow.swiggyops.de
+  use_backend dsp-mlflow_backend if dsp-mlflow
+
+  acl druidrouter-compass hdr(host) -i druidrouter-compass.swiggyops.de
+  use_backend druidrouter-compass_backend if druidrouter-compass
+
+  acl xp-server hdr(host) -i xp-server.swiggyops.de
+  use_backend xp-server_backend if xp-server
+
+  acl g-rill hdr(host) -i g-rill.swiggyops.de
+  use_backend g-rill_backend if g-rill
+
+  acl watchdog-admin hdr(host) -i watchdog-admin.swiggyops.de
+  use_backend watchdog-admin_backend if watchdog-admin
+
+  acl snorkelbx-hdfc hdr(host) -i snorkelbx-hdfc.swiggyops.de
+  use_backend snorkelbx-hdfc_backend if snorkelbx-hdfc
+
+  acl snorkelbx-icici hdr(host) -i snorkelbx-icici.swiggyops.de
+  use_backend snorkelbx-icici_backend if snorkelbx-icici
+
+  acl local hdr(host) -i locale.swiggyops.de
+  use_backend local_backend if local
+
+  acl de-oneview hdr(host) -i de-oneview.swiggyops.de
+  use_backend de-oneview_backend if de-oneview
+
+  acl isHost_ingestion-platform-dashboard hdr(host) ingestion-platform-dashboard.swiggyops.de
+  use_backend swagger_ingestion_backend if isHost_ingestion-platform-dashboard
+  
+  acl tns-flujo hdr(host) -i tns-flujo-ui.swiggyops.de
+  use_backend tns-flujo_backend if tns-flujo
+
+  acl host_geo hdr(host) -i de-geo.swiggyint.in de-geo.swiggy.in
+  use_backend geo_backend if host_geo
+
+  acl host_serviceability_rule_ui hdr(host) -i serviceability-rule-ui.swiggy.com
+  use_backend serviceability_rule_ui_backend if host_serviceability_rule_ui
+
+  acl host_ops hdr(host) -i ops.swiggyops.de
+  use_backend ops_backend if host_ops
+
+  acl dexp-airflow hdr(host) -i dexp-airflow.swiggyops.de
+  use_backend dexp-airflow_backend if dexp-airflow
+
+  acl data-scince-visualizations-acl hdr(host) -i data-scince-visualizations.swiggyops.de
+  use_backend data-scince-visualizations if data-scince-visualizations-acl
+
+  acl dstools-host hdr(host) -i  dstools.swiggyops.de
+  use_backend dstools-backend if dstools-host
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Original Backend Configuration follows but they shall receive traffic from  #
+# respective host based rule.                                                 #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+backend prometheus-alerts_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host prometheus-alerts.swiggyops.de
+  server prometheus-alerts 172.31.20.250:9093 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend priority-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host prioritydashboard.swiggyops.de
+  server priority-dashboard 172.31.27.188:8083 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend moneta-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host delivery-moneta-dashboard-01.swiggyops.de
+  server moneta-dashboard-1 172.31.60.189:8080 weight 100 check
+  #server moneta-dashboard-2 172.31.50.197:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend delivery-rmq_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host prod.de.rmq.haproxy.swiggyops.de
+  server delivery-rmq 172.31.7.47:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mobile-jenkins_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mobile-cicd-uat.swiggyops.de
+  server mobile-jenkins 10.0.19.100:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend lms_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host lms.swiggyops.de
+  server lms 172.31.6.101:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend de-p-explorer-01_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host de-p-explorer-01.swiggyops.de
+  server de-exporter 172.31.3.202:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend gamooga-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host gamooga-injest.swiggyops.de
+  server gamooga-dashboard 172.31.4.96:9010 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend swiggui_backend
+  mode http
+  option httpclose
+  http-request set-header Host swiggui.s3-website-ap-southeast-1.amazonaws.com
+  balance roundrobin
+  timeout server 3600s
+  default-server inter 3s fall 2 rise 3
+  server swiggui-s3-dashboard swiggui.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
+
+backend clm-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host clm-admin.swiggyops.de
+  server clm-dashboard 172.31.42.120:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend anobis_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host anobis.swiggy.com
+  server anobis-dash 172.31.48.231:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend sno-dashboard_backend 
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host sno-dashboard.swiggyops.de
+  server sno-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server sno-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server sno-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend sand-rasmalai_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host sand-collections-dashboard.swiggyops.de
+  server sand-rasmalai 172.31.27.74:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend sand-p-rasmalai_backend
+  mode http
+  balance roundrobin
+  balance roundrobin
+  server ws1 172.31.27.74:9010 maxconn 1000 check cookie ws1
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host sand-p-rasmalai-dashboard.swiggyops.de
+  #server sand-p-rasmalai 172.31.27.74:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend redash_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dbaccess.swiggyops.de
+  server redash 172.31.73.131:5000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dp-fie-ingest_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dp-file-ingest.swiggyops.de
+  server dp-fie-ingest 172.31.4.96:9010 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend data-approvals_backend
+  mode http
+  balance roundrobin
+  http-request set-path /prod/%[path]
+  http-request set-header Host 6j466un2d9.execute-api.ap-southeast-1.amazonaws.com
+  server api-gw-1 6j466un2d9.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(6j466un2d9.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  server api-gw-2 6j466un2d9.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(6j466un2d9.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  server api-gw-3 6j466un2d9.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(6j466un2d9.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend npmjs-hap_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  rspadd Content-Security-Policy:\ upgrade-insecure-requests
+  http-request set-header Host npmjs-hap.swiggyops.de
+  server npmjs-hap 172.31.15.147:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend web-watchtower_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host web-watchtower.swiggyops.de
+  server web-watchtower 172.31.46.117:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend on-call_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host oncall.swiggyops.de
+  server on-call 172.31.5.21:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend logman_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host logman.swiggyops.de
+  server logman-1 internal-ad0517e09cde940e3b20dbce9126bfc3-44682115.ap-southeast-1.elb.amazonaws.com:80 weight 100 check resolvers dns-1
+  server logman-2 internal-ad0517e09cde940e3b20dbce9126bfc3-44682115.ap-southeast-1.elb.amazonaws.com:80 weight 100 check resolvers dns-1
+  http-response add-header X-Data-Origin %b/%s
+
+
+backend shared_nexus_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host shr-p-nexus-02-dash.swiggyops.de
+  server shared-nexus-1 172.31.15.71:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend wallet_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host wallet-ops-service.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server wallet-service sentinel.production.singapore:80 check resolvers dns-private check inter 100s
+  http-response add-header X-Data-Origin %b/%s
+
+backend gda-txn-dashboard_backend
+  balance roundrobin
+  http-request set-header X-Forwarded-Host gda-txn-dashboard.swiggyops.de
+  http-request set-header Host gda-txn-dashboard.production.singapore
+  server gda-txn-dashboard-1 gda-txn-dashboard.production.singapore:80 check resolvers dns-private check inter 1000
+  server gda-txn-dashboard-2 gda-txn-dashboard.production.singapore:80 check resolvers dns-private check inter 1000
+  server gda-txn-dashboard-3 gda-txn-dashboard.production.singapore:80 check resolvers dns-private check inter 1000
+  #http-response add-header X-Data-Origin %b/%s
+
+backend chacha2_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host chacha2.swiggyops.de
+  server chacha2 172.31.8.84:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend shared_nexus-registry_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host shr-registry.swiggyops.de
+  server shared-nexus-registry-1 172.31.15.71:8082 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend wallet-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-response set-header Access-Control-Allow-Origin "wallet-dashboard.swiggyops.de"
+  http-response set-header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, JSNLog-RequestId, activityId, applicationId, applicationUserId, channelId, senderId, sessionId"
+  http-response set-header Access-Control-Max-Age 3628800
+  http-response set-header Access-Control-Allow-Methods "GET, DELETE, OPTIONS, POST, PUT"
+  http-request set-header Host wallet-dashboard.production.singapore
+  server wallet-dashboard-1 wallet-dashboard.production.singapore:80 check resolvers dns-private
+  server wallet-dashboard-2 wallet-dashboard.production.singapore:80 check resolvers dns-private
+  server wallet-dashboard-3 wallet-dashboard.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend ads-external_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host ads-external-api.swiggy.prod
+  server ads-external-api-1 ads-external-api.production.singapore:80 weight 100 check resolvers dns-private
+  server ads-external-api-2 ads-external-api.production.singapore:80 weight 100 check resolvers dns-private
+  server ads-external-api-3 ads-external-api.production.singapore:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend de-war-room_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host de-war-room-server.production.singapore
+  server de-war-room-1 de-war-room-server.production.singapore:80 check resolvers dns-private
+  server de-war-room-2 de-war-room-server.production.singapore:80 check resolvers dns-private
+  server de-war-room-3 de-war-room-server.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend super-back_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host super-dash.production.singapore
+  server super-back-1 super-dash.production.singapore:80 check resolvers dns-private
+  server super-back-2 super-dash.production.singapore:80 check resolvers dns-private
+  server super-back-3 super-dash.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend pangolier-frontend_backend
+  http-request set-header Host pangolier-frontend.production.singapore
+  server pangolier-frontend-1 pangolier-frontend.production.singapore:80 check resolvers dns-private
+  server pangolier-frontend-2 pangolier-frontend.production.singapore:80 check resolvers dns-private
+  server pangolier-frontend-3 pangolier-frontend.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend ci-pushgateway_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host ci-pushgateway.swiggyops.de
+  server ci-pushgateway 172.31.67.243:9091 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend sand-dd-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host sand-collection-dashboard.swiggyops.de
+  server sand-dd-dasboard 172.31.40.103:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend web-webhooks-watchtower_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host web-webhooks-watchtower.swiggyops.de
+  server web-webhooks-watchtower 172.31.46.117:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dsp-control-tower_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  option httpchk GET /sentinel/health HTTP/1.1\r\nHost:\ sentinel.production.singapore\r\nUser-Agent:\ HAProxy-HTTP-Health-Check
+  http-check expect status 200
+  http-request set-header x-forwarded-host dsp-control-tower.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server dsp-control-tower-1 sentinel.production.singapore:80 check resolvers dns-private
+  server dsp-control-tower-2 sentinel.production.singapore:80 check resolvers dns-private
+  server dsp-control-tower-3 sentinel.production.singapore:80 check resolvers dns-private
+  server dsp-control-tower-4 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend cms-pp-workflow-service_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend serviceability_backend
+  http-request set-header Host lego-ui.production.singapore
+  server delivery-lego-ui-1 lego-ui.production.singapore:80 check resolvers dns-private
+  server delivery-lego-ui-2 lego-ui.production.singapore:80 check resolvers dns-private
+  server delivery-lego-ui-3 lego-ui.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend super-back-backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host super-dash-backend.swiggy.prod
+  server super-back-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server super-back-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server super-back-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server super-back-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend plops-backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host plops.swiggyops.de
+  server plops-1  sentinel.production.singapore:80 check resolvers dns-private
+  server plops-2  sentinel.production.singapore:80 check resolvers dns-private
+  server plops-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend  gatekeeper_backend
+  http-request set-header host d3td4veptc.execute-api.ap-southeast-1.amazonaws.com
+  server api_gw-1 d3td4veptc.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(d3td4veptc.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  server api_gw-2 d3td4veptc.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(d3td4veptc.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  server api_gw-3 d3td4veptc.execute-api.ap-southeast-1.amazonaws.com:443 check ssl sni str(d3td4veptc.execute-api.ap-southeast-1.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  http-response del-header Server
+
+backend timeline_backend
+  http-request set-header host vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com
+  server api_gw-1 vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  server api_gw-2 vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  server api_gw-3 vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-timeline-thhijeow5s7ifjjfwyxqo6trce.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  http-response del-header Server
+
+backend cp_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host cp.swiggyops.de
+  server cp-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server cp-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server cp-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend zeppelin_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dp-scheduler-zeppelin.production.singapore
+  http-request set-header x-forwarded-host dp-scheduler-zeppelin.production.singapore
+  server cp-sentinal-1  dp-scheduler-zeppelin.production.singapore:80 check resolvers dns-private
+  server cp-sentinal-2  dp-scheduler-zeppelin.production.singapore:80 check resolvers dns-private
+  server cp-sentinal-3  dp-scheduler-zeppelin.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+
+backend brahma_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host brahma.swiggyops.de
+  server brahma-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server brahma-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server brahma-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend flow_dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host conductor-ui.production.singapore
+  server flo-dashboard-1 conductor-ui.production.singapore:80 check resolvers dns-private
+  server flo-dashboard-2 conductor-ui.production.singapore:80 check resolvers dns-private
+  server flo-dashboard-3 conductor-ui.production.singapore:80 check resolvers dns-private
+  server flo-dashboard-4 conductor-ui.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend swagger_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host flo-ui.swiggyops.de
+  server flo-dashboard-2 172.31.36.126:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend notification_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host notification-rill.swiggyops.de
+  server rill-notification 10.10.142.7:8084 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rm1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rm1-rill.swiggyops.de
+  server rill-rm1 10.10.188.127:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend nm1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host nm1-rill.swiggyops.de
+  server rill-nm1 10.10.188.127:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend app1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host app1-rill.swiggyops.de
+  server rill-app1 10.10.188.127:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 100-90_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-100-90-rill.swiggyops.de
+  server rill-100-90 10.10.100.90:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 110-90_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-110-90-rill.swiggyops.de
+  server rill-110-90 10.10.110.90:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rmu1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rmu1-rill.swiggyops.de
+  server rill-rmu1 10.10.197.254:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend nmu1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host nmu1-rill.swiggyops.de
+  server rill-nmu1 10.10.197.254:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 98-127_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-98-127-rill.swiggyops.de
+  server rill-98-127 10.10.98.127:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 210-184_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-210-184-rill.swiggyops.de
+  server rill-210-184 10.10.210.184:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 11-28_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-11-28-rill.swiggyops.de
+  server rill-11-28 10.10.11.28:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 132-22_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-132-22-rill.swiggyops.de
+  server rill-132-22 10.10.132.22:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 224-145_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-224-145-rill.swiggyops.de
+  server rill-224-145 10.10.224.145:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 56-65_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-56-65-rill.swiggyops.de
+  server rill-56-65 10.10.56.65:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 127-166_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-127-166-rill.swiggyops.de
+  server rill-127-166 10.10.127.166:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 150-102_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-150-102-rill.swiggyops.de
+  server rill-150-102 10.10.150.102:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 128-84_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-128-84-rill.swiggyops.de
+  server rill-128-84 10.10.128.84:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 199-154_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-199-154-rill.swiggyops.de
+  server rill-199-154 10.10.199.154:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 64-138_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-64-138-rill.swiggyops.de
+  server rill-64-138 10.10.64.138:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 128-71_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-128-71-rill.swiggyops.de
+  server rill-128-71 10.10.128.71:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend 56-3_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-56-3-rill.swiggyops.de
+  server rill-56-3 10.10.56.3:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend central_kafka_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host central-kafka-manager.swiggyops.de
+  server central-kafka-1 172.31.63.122:9000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidhistorical_compass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidhistorical-compass.swiggyops.de
+  server druidhistorical_compass 10.10.242.8:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidcordinator_compass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidcordinator-compass.swiggyops.de
+  server druidcordinator_compass 10.10.242.8:8090 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend onboarding_compass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host onboarding-compass.swiggyops.de
+  server onboarding_compass 10.10.4.247:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend hive_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host hive.swiggyops.de
+  server hive 172.31.3.190:10000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend prometheus-alert_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host prometheus-rules.swiggyops.de
+  server prometheus-rules 172.31.9.203:9090 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend checkout-dash_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host checkout-dashbaord.swiggyops.de
+  server checkout-dash 172.31.1.2:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend data-processing_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dp-dipole-data-processing.swiggyops.de
+  server data-processing 172.31.9.167:8998 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend flo-3_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host flo.swiggyops.de
+  server flo-3 172.31.4.111:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-rmq_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vendor-rmq.swiggyops.de
+  server vendor-rmq 172.31.12.255:15672 weight 100 check
+  server vendor-rmq-1 172.31.28.140:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend ff-rmq_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host ff-rmq-dashboard.swiggyops.de
+  server ff-rmq 172.31.14.248:15672 weight 100 check
+  server ff-rmq-1 172.31.4.5:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rmq-com-plt_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rmq-p-commplt-01.swiggyops.de
+  server rmq-com-plt 172.31.31.253:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidbrokercompass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidbrokercompas.swiggyops.de
+  server druidbrokercompass 10.10.40.198:8082 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dp-p-chronos-01_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dp-p-chronos-01.swiggyops.de
+  server dp-p-chronos 172.31.30.56:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend devops-p-confluent-control-center-6.0_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host confluent-control-center.swiggyops.de
+  server devops-p-confluent-control-center-1 internal-confluent-control-center-1910240016.ap-southeast-1.elb.amazonaws.com:80 weight 100 check resolvers dns-private
+  server devops-p-confluent-control-center-2 internal-confluent-control-center-1910240016.ap-southeast-1.elb.amazonaws.com:80 weight 100 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend appu1-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host appu1-rill.swiggyops.de
+  server special-rill 10.10.197.254:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-storm_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vendor-storm-ui.swiggyops.de
+  server vendor-storm 172.31.33.247:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend appu2-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host appu2-rill.swiggyops.de
+  server appu2-rill 10.10.128.0:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend nmu2-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host nmu2-rill.swiggyops.de
+  server nmu2-rill 10.10.128.0:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rmu2-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rmu2-rill.swiggyops.de
+  server rmu2-rill 10.10.128.0:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-kronos-kibana_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vendor-kronos-kibana.swiggyops.de
+  server vendor-kronos-kibana 172.31.53.10:5601 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rill-166-112_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dn-10-10-166-112-rill.swiggyops.de
+  server rill-166-112 10.10.166.112:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend npmjs-server_backend
+  mode http
+  balance roundrobin
+  #http-request del-header X-Forwarded-Proto
+  default-server inter 3s fall 2 rise 3
+  rspadd Content-Security-Policy:\ upgrade-insecure-requests
+  #http-request set-header X-Forwarded-Proto https
+  http-request set-header Host npmjs.swiggyops.de
+  server npmjs-server 172.31.15.147:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend pricing-dashboard_backend
+  mode http
+  balance roundrobin
+  timeout server 3600s
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host pricing-dashboard.swiggyops.de
+  server pricing-dash 172.31.68.249:8090 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend delivery-sentry-dash_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host sentry-delivery.swiggyapp.com
+  server delivery-sentry-dash 172.31.18.246:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend snd-p-suggest_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host search-sand-p-suggest-m6ickkbqow727yxm2ojmrsxgwi.ap-southeast-1.es.amazonaws.com
+  server snd-p-suggest search-sand-p-suggest-m6ickkbqow727yxm2ojmrsxgwi.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend dash-data-source_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-dash-data-source-zsqdyuvjj2w5b4nfx2ck7o5tri.ap-southeast-1.es.amazonaws.com
+  server dash-bcl-service-es-cluster vpc-dash-data-source-zsqdyuvjj2w5b4nfx2ck7o5tri.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend dash-bcl-service-es-cluster_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-dash-bcl-service-es-cluster-ryko42dupgmw5vxuw4hytd62fu.ap-southeast-1.es.amazonaws.com
+  server dash-data-source vpc-dash-bcl-service-es-cluster-ryko42dupgmw5vxuw4hytd62fu.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend scm-search-es-cluster_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-scm-search-es-jcxbhdapukstzlgc5x6kaf4f2i.ap-southeast-1.es.amazonaws.com
+  server scm-search-es-cluster vpc-scm-search-es-jcxbhdapukstzlgc5x6kaf4f2i.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+  
+backend snd-p-suggest-v1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host search-sand-p-suggest-v1-s2iyfebrz37ztpmngtnfpc2c54.ap-southeast-1.es.amazonaws.com
+  server snd-p-suggest-v1 search-sand-p-suggest-v1-s2iyfebrz37ztpmngtnfpc2c54.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend artemis-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-artemis-dashboard-jkauym5bk6yxxmowgkslalrmqa.ap-southeast-1.es.amazonaws.com
+  server artemis-dashboard vpc-artemis-dashboard-jkauym5bk6yxxmowgkslalrmqa.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend snd-p-conan_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host search-sand-p-conan-r4us7zwqea3f6wq2ktfnp4uhri.ap-southeast-1.es.amazonaws.com
+  server snd-p-conan search-sand-p-conan-r4us7zwqea3f6wq2ktfnp4uhri.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend daily-dash_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host daily-dashboard.swiggyops.de
+  server daily-dash 172.31.36.29:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout-server_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payouts.swiggyops.de
+  server payout-server 172.31.78.29:8001 weight 100 check
+  server payout-server-1 172.31.36.137:8001 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-am_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-am.swiggyops.de
+  server mercury-am 172.31.9.74:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-spark-history_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-spark-history.swiggyops.de
+  server mercury-spark-history 172.31.9.74:18080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-history_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-history.swiggyops.de
+  server mercury-history 172.31.9.74:19888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-hdfs_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-hdfs.swiggyops.de
+  server mercury-hdfs 172.31.9.74:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-rm_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-rm.swiggyops.de
+  server mercury-rm 172.31.9.74:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend auth-consul_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host authenticate-consul-ui.swiggyops.de
+  server auth-consul 172.31.14.247:443 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend connect_cluster
+  mode http
+  option abortonclose
+  option httpclose
+  option http-server-close
+  timeout server 12s
+  http-request set-header X-Forwarded-Scheme https
+  default-server inter 3s fall 2 rise 3
+  http-request set-header X-Forwarded-Host connect.swiggy.com
+  option httpchk HEAD /health HTTP/1.1\r\nHost:\ connect.swiggy.com
+  server connect-rock-1 connect.production.rock:80 weight 100 check check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-rm-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-rm-ui.swiggyops.de
+  server yarn-rm-ui 172.31.3.190:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-am-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-am-ui.swiggyops.de
+  server yarn-am-ui 172.31.3.190:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-nm-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-nm-ui.swiggyops.de
+  server yarn-nm-ui 172.31.7.79:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-history-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-history-ui.swiggyops.de
+  server yarn-history-ui 172.31.3.190:4040 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend hdfs-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host hdfs-ui.swiggyops.de
+  server hdfs-ui 172.31.3.190:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend spark-history_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host spark-history.swiggyops.de
+  server spark-history 172.31.3.190:18080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-rm-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-rm-ui-1.swiggyops.de
+  server yarn-rm-ui-1 172.31.2.104:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-am-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-am-ui-1.swiggyops.de
+  server yarn-am-ui-1 172.31.2.104:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-nm-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-nm-ui-1.swiggyops.de
+  server yarn-nm-ui-1 172.31.6.191:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-history-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-history-ui-1.swiggyops.de
+  server yarn-history-ui-1 172.31.2.104:4040 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend hdfs-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host hdfs-ui-1.swiggyops.de
+  server hdfs-ui-1 172.31.2.104:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend spark-history-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host spark-history-1.swiggyops.de
+  server spark-history-1 172.31.2.104:18080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-nm1-ui-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-nm1-ui-1.swiggyops.de
+  server yarn-nm1-ui-1 172.31.6.191:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend yarn-nm2-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host yarn-nm2-ui.swiggyops.de
+  server yarn-nm2-ui 172.31.14.155:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dns-10-10-227-2-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dns-10-10-227-2-rill.swiggyops.de
+  server dns-10-10-227-rill 10.10.227.2:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dns-10-10-15-115-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dns-10-10-15-115-rill.swiggyops.de
+  server dns-10-10-15-115-rill 10.10.15.115:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dns-10-10-170-126-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dns-10-10-170-126-rill.swiggyops.de
+  server dns-10-10-170-126-rill 10.10.170.126:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dns-10-10-104-110-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dns-10-10-104-110-rill.swiggyops.de
+  server dns-10-10-104-110-rill 10.10.104.110:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dipole-service_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dipole-service.swiggyops.de
+  server dipole-service 172.31.3.154:9091 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+# backend orisis-npl_backend
+#   mode http
+#   balance roundrobin
+#   default-server inter 3s fall 2 rise 3
+#   http-request set-header Host vpc-orisis-npl-bfvcohczfsgnj7oyqqa4vv3t6e.ap-southeast-1.es.amazonaws.com
+#   server orisis-npl vpc-orisis-npl-bfvcohczfsgnj7oyqqa4vv3t6e.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+#   http-response add-header X-Data-Origin %b/%s
+
+backend mercury-nm1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-nm1.swiggyops.de
+  server mercury-nm1 172.31.9.74:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-nm2_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-nm2.swiggyops.de
+  server mercury-nm2 172.31.14.21:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-nm3_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-nm3.swiggyops.de
+  server mercury-nm3 172.31.12.213:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-nm4_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-nm4.swiggyops.de
+  server mercury-nm4 172.31.8.171:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend mercury-nm5_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mercury-nm5.swiggyops.de
+  server mercury-nm5 172.31.6.96:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend erd_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host erd.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server erd_sever sentinel.production.singapore:80 check resolvers dns-private
+  server erd_sever-1 sentinel.production.singapore:80 check resolvers dns-private
+  server erd_sever-2 sentinel.production.singapore:80 check resolvers dns-private
+  server erd_sever-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend oneview_cluster
+  mode http
+  balance roundrobin
+  option abortonclose
+  option httpclose
+  option http-server-close
+  timeout server 12s
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host oneview.swiggy.com
+  http-request set-header Host sentinel.production.singapore
+  server one_view sentinel.production.singapore:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout1-yarnresource_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payout-critical-1-yarnresource.swiggyops.de
+  server payout1-yarnresource 172.31.84.42:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout1-application_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payout-critical-1-application.swiggyops.de
+  server payout1-application 172.31.84.42:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout1-ganglia_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payout-critical-1-ganglia.swiggyops.de
+  server payout1-ganglia 172.31.84.42:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout1-spark_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payout-critical-1-spark.swiggyops.de
+  server payout1-spark 172.31.84.42:18080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend payout1-yarnnode_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payout-critical-1-yarnnode.swiggyops.de
+  server payout1-yarnnode 172.31.84.42:8042 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend spark-history-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host spark-history-dipole.swiggyops.de
+  server spark-history-dipole 172.31.9.167:18080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend rm-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rm-dipole.swiggyops.de
+  server rm-dipole 172.31.9.167:8088 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend nm-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host nm-dipole.swiggyops.de
+  server nm-dipole 172.31.9.167:50070 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend livy-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host livy-dipole.swiggyops.de
+  server livy-dipole 172.31.9.167:8998 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend jhs-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host jhs-dipole.swiggyops.de
+  server jhs-dipole 172.31.9.167:19888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend am-dipole_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host am-dipole.swiggyops.de
+  server am-dipole 172.31.9.167:20888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dlm-admin_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server app-kong-nlb-1 172.31.43.232:8080 weight 100 check
+  server app-kong-nlb-2 172.31.36.127:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend chronosdp_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host chronosdp.swiggyops.de
+  server chronosdp 172.31.30.56:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend kitchen-tech-rmq-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host kitchen-tech-rmq-dashboard.swiggyops.de
+  server kitchen-tech-rmq-dashboard 172.31.21.128:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend partner-prod_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host partner-prod-1.swiggyops.de
+  server partner-prod 172.31.8.50:7000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend ug-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host ug-rill.swiggyops.de
+  server ug-rill 10.10.105.22:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dp-event-onboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dp-event-onboard.swiggyops.de
+  server dp-event-onbaord 172.31.29.95:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-portal_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vendor-portal.swiggyops.de
+  server vendor-portal 172.31.5.47:7000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend servu-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host servu-rill.swiggyops.de
+  server servu-rill 10.10.105.22:8083 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend cms-menudigitization_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host cms-menudigitsation.swiggyops.de
+  server cms-menudigitization-1 172.31.41.43:8080 weight 100 check
+  server cms-menudigitization-2 172.31.46.166:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend pci-fim-server_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host pci-fim-server.swiggyops.de
+  server pci-fim fim-server.swiggy.prod:5601 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend serv-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host serv-rill.swiggyops.de
+  server serv-rill 10.10.142.7:8083 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend de-presto-adhoc-1_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host de-presto-adhoc.swiggyops.de
+  server de-presto-adhoc-1 10.100.1.219:24600 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend badges-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host badges-dashboard.swiggy.prod
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-3 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-4 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend maps-galileo_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host maps-galileo.production.singapore
+  server maps-galileo-1 maps-galileo.production.singapore:80 check resolvers dns-private
+  server maps-galileo-2 maps-galileo.production.singapore:80 check resolvers dns-private
+  server maps-galileo-3 maps-galileo.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend comm-rmq-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host comm-rmq-dashboard.swiggyops.de
+  server comm-rmq-dashboard 172.31.12.106:15672 weight 100 check
+  server comm-rmq-dashboard-1 172.31.12.116:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend finance-rmq-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host finance-rmq-dashboard.swiggyops.de
+  server finance-rmq-dashboard 172.31.30.231:15672 weight 100 check
+  server finance-rmq-dashboard-1 172.31.13.80:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend prod-dexp-rmq_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host prod-dexp-rmq-dashboard.swiggyops.de
+  server prod-dexp-rmq 172.31.8.107:15672 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend oldg-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host oldg-rill.swiggyops.de
+  server oldg-rill 10.10.105.22:9000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidcoordinator-uat_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidcoordinator-uat.swiggyops.de
+  server druidcoordinator-uat 10.65.70.119:8081 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidhistorical-uat_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidhistorical-uat.swiggyops.de
+  server druidhistorical-uat 10.65.70.119:8090 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dumbledore_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-forwarded-host dumbledore.swiggyops.de
+  server dumbledore-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server dumbledore-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server dumbledore-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend graft-editor_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host graft-editor.swiggyops.de
+  server graft-editor 172.31.33.84:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend swiggyplus-service_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host swiggyplus-service.production.singapore
+  server swiggyplus-service-1 swiggyplus-service.production.singapore:80 check resolvers dns-private
+  server swiggyplus-service-2 swiggyplus-service.production.singapore:80 check resolvers dns-private
+  server swiggyplus-service-3 swiggyplus-service.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend swiggyplus-collection_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host swiggyplus-collection.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server swiggyplus-collection-1 sentinel.production.singapore:80 check resolvers dns-private
+  server swiggyplus-collection-2 sentinel.production.singapore:80 check resolvers dns-private
+  server swiggyplus-collection-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend swiggyplus-layout_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host swiggyplus-layout.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server swiggyplus-layout-1 sentinel.production.singapore:80 check resolvers dns-private
+  server swiggyplus-layout-2 sentinel.production.singapore:80 check resolvers dns-private
+  server swiggyplus-layout-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend payouts-engine_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host payouts-engine.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server payouts-engine-1 sentinel.production.singapore:80 check resolvers dns-private
+  server payouts-engine-2 sentinel.production.singapore:80 check resolvers dns-private
+  server payouts-engine-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend jenkins-dba_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host jenkins-dba.swiggyops.de
+  server jenkins-dba 172.31.12.154:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend capacity-dashboard-node_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host capacity-dashboard-node.production.singapore
+  server capacity-dashboard-node-1 capacity-dashboard-node.production.singapore:80 check resolvers dns-private
+  server capacity-dashboard-node-2 capacity-dashboard-node.production.singapore:80 check resolvers dns-private
+  server capacity-dashboard-node-3 capacity-dashboard-node.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend osiris-django_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host osiris-django.production.singapore
+  server osiris-django-1 osiris-django.production.singapore:80 check resolvers dns-private
+  server osiris-django-2 osiris-django.production.singapore:80 check resolvers dns-private
+  server osiris-django-3 osiris-django.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend checkout-new_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host checkout-new-dashboard.swiggyops.de
+  server checkout-new 172.31.1.2:3000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend manual-refund-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host manual-refund-dashboard.swiggy.prod
+  server app-kong-nlb-1 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  server app-kong-nlb-2 kong-internal-nlb-v2.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend payments-config-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host payments-config-dashboard.swiggyops.de
+  server payments-config-dashboard 172.31.12.96:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend dp-snowgate_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host dp-snowgate.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server erd_sever sentinel.production.singapore:80 check resolvers dns-private
+  server dp-snowgate-1 sentinel.production.singapore:80 check resolvers dns-private
+  server dp-snowgate-2 sentinel.production.singapore:80 check resolvers dns-private
+  server dp-snowgate-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend flo-ui-production_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host flo-ui-production.swiggyops.de
+  server flo-ui-1 flo-ui.production.singapore:80 check resolvers dns-private
+  server flo-ui-2 flo-ui.production.singapore:80 check resolvers dns-private
+  server flo-ui-3 flo-ui.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend cancellation-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host cancellation-ui.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server cancellation-ui-1 sentinel.production.singapore:80 check resolvers dns-private
+  server cancellation-ui-2 sentinel.production.singapore:80 check resolvers dns-private
+  server cancellation-ui-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend geoentities-platform_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host geoentities-platform.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server geoentities-platform-1 sentinel.production.singapore:80 check resolvers dns-private
+  server geoentities-platform-2 sentinel.production.singapore:80 check resolvers dns-private
+  server geoentities-platform-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend gda-mlm.production_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host gda-mlm.production.singapore
+  server gda-mlm.production-1 gda-mlm.production.singapore:80 check resolvers dns-private
+  server gda-mlm.production-2 gda-mlm.production.singapore:80 check resolvers dns-private
+  server gda-mlm.production-3 gda-mlm.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend dsp-mlflow_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host dsp-mlflow.production.singapore
+  server dsp-mlflow-1 dsp-mlflow.production.singapore:80 check resolvers dns-private
+  server dsp-mlflow-2 dsp-mlflow.production.singapore:80 check resolvers dns-private
+  server dsp-mlflow-3 dsp-mlflow.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend druidrouter-compass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host druidrouter-compass.swiggyops.de
+  server druidrouter-compass 10.10.18.254:8888 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend xp-server_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host xp-server.production.singapore
+  server xp-server.production.singapore-1 xp-server.production.singapore:80 check resolvers dns-private
+  server xp-server.production.singapore-2 xp-server.production.singapore:80 check resolvers dns-private
+  server xp-server.production.singapore-3 xp-server.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend g-rill_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host g-rill.swiggyops.de
+  server g-rill 10.10.142.7:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend watchdog-admin_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host watchdog-admin.swiggyops.de
+  server watchdog-admin 172.31.23.133:8000 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend snorkelbx-hdfc_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host snorkelbx-hdfc.swiggyops.de
+  server snorkelbx-hdfc 172.31.1.159:9004 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend snorkelbx-icici_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host snorkelbx-icici.swiggyops.de
+  server snorkelbx-icici 172.31.1.159:9002 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend local_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host locale.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server local-server sentinel.production.singapore:80 check resolvers dns-private
+  server local-server-1 sentinel.production.singapore:80 check resolvers dns-private
+  server local-server-2 sentinel.production.singapore:80 check resolvers dns-private
+  server local-server-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend de-oneview_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host de-oneview.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server de-oneview sentinel.production.singapore:80 check resolvers dns-private
+  server de-oneview-1 sentinel.production.singapore:80 check resolvers dns-private
+  server de-oneview-2 sentinel.production.singapore:80 check resolvers dns-private
+  server de-oneview-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend swagger_ingestion_backend
+  default-server inter 3s fall 2 rise 3
+  server sand-prod-ingestion-pipeline-1 172.31.43.54:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend tns-flujo_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host tns-flujo-ui.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server tns-flujo-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend geo_backend
+  mode http
+  balance roundrobin
+  option httpclose
+  option abortonclose
+  option http-server-close
+  server ops-dashboard-1 172.31.13.215:3000 weight 50 check
+  server ops-dashboard-2 172.31.2.247:3000 weight 50 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend serviceability_rule_ui_backend
+  balance source
+  #hash-type consistent
+  option forwardfor
+  option http-server-close
+  timeout tunnel 30m
+  timeout client 30m
+  timeout http-keep-alive 30m
+  #cookie SERVERID insert indirect nocache
+  server delivery-lego-ui-1 172.31.46.122:8080 weight 50 check
+  server delivery-lego-ui-2 172.31.41.2:8080 weight 50 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend ops_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host ops.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server tns-flujo-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend content_backend
+  mode http
+  http-request set-header Host new-portal-content.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 new-portal-content.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 new-portal-content.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+
+backend context-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host context-ui.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server tns-flujo-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend dexp-airflow_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header X-Forwarded-Host dexp-airflow.swiggyops.de
+  server dexp-airflow-1 dexp-airflow.production.singapore:80 check resolvers dns-private
+  server dexp-airflow-2 dexp-airflow.production.singapore:80 check resolvers dns-private
+  server dexp-airflow-3 dexp-airflow.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend map-editor_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host map-editor.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server tns-flujo-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server tns-flujo-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend mydbops-pmm_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server rill-128-71 172.31.11.131:8080 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend de-warroom_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host de-warroom.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server de-warroom-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server de-warroom-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server de-warroom-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend goproxy_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server goproxy 172.31.42.162:80 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend alation_backend
+  mode http
+  default-server inter 3s fall 2 rise 3
+  server goproxy 172.31.61.84:80 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend vas-admin_backend
+  mode http
+  http-request set-header Host vendor-vas-admin-p.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-vas-admin-p.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vendor-vas-admin-p.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+
+backend vas-admin-s_backend
+  mode http
+  http-request set-header Host vendor-vas-admin-s.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-vas-admin-s.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vendor-vas-admin-s.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend kms-apis_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host kms-apis-rock.production.singapore
+  server kms-apis-rock-1 kms-apis-rock.production.singapore:80 check resolvers dns-private
+  server kms-apis-rock-2 kms-apis-rock.production.singapore:80 check resolvers dns-private
+  server kms-apis-rock-3 kms-apis-rock.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend vas-portal-s_backend
+  mode http
+  http-request set-header Host vendor-vas-portal-s.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-vas-portal-s.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vendor-vas-portal-s.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend vas-portal_backend
+  mode http
+  http-request set-header Host vendor-vas-portal-p.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-vas-portal-p.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vendor-vas-portal-p.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend seceng_sentinal_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server seceng_dataship-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_dataship-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_dataship-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend seceng_default_api_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id k7me4txnof
+  server seceng_default_api-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_default_api-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_default_api-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s  
+
+backend seceng_elevator_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id i3bvdputxi
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend seceng_clevertap_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id 7zuvqskk33
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+ backend seceng_kenscio_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id 7zuvqskk33
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+ backend seceng_click2dial_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id zxs1ab53c4
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend seceng_data-approvals_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id pcnnjjx8cl
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend seceng_pii-approvals_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id dl4bjcly96
+  server seceng_elevator-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_elevator-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s 
+  
+backend seceng_google_drive_sink_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id 4m4p564kh9
+  server seceng_google_drive_sink-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_google_drive_sink-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_google_drive_sink-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend seceng_one_drive_sink_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id jgucjd99dh
+  server seceng_one_drive_sink-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_one_drive_sink-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_one_drive_sink-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend seceng_survey_monkey_backend 
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host seceng-apps.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  http-request set-header x-apigw-api-id lnlgb8rcu1
+  server seceng_survey_monkey_sink-1 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_survey_monkey_sink-2 sentinel.production.singapore:80 check resolvers dns-private
+  server seceng_survey_monkey_sink-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend airflow-dp_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server airflow-dp 172.31.1.23:8081 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend airflow-dp-flower_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server airflow-dp-flower 172.31.1.23:5556 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend fcp-dashboard-finance_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host fcp-dashboard-finance.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server fcp-rock-1 sentinel.production.singapore:80 check resolvers dns-private
+  server fcp-rock-2 sentinel.production.singapore:80 check resolvers dns-private
+  server fcp-rock-3 sentinel.production.singapore:80 check resolvers dns-private
+
+backend crm-telephony-service_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host crm-telephony-service.production.singapore
+  server crm-telephony-service-1 crm-telephony-service.production.singapore:80 check resolvers dns-private
+  server crm-telephony-service-2 crm-telephony-service.production.singapore:80 check resolvers dns-private
+  server crm-telephony-service-3 crm-telephony-service.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend snd-p-search-v7_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-sand-p-search-v7-eqtkiro5n4kgp6fsepnzxxsviq.ap-southeast-1.es.amazonaws.com
+  server snd-p-search-kibana vpc-sand-p-search-v7-eqtkiro5n4kgp6fsepnzxxsviq.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s
+
+backend snd-p-search-v7-analysis_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-sand-p-search-v7-analysis-c47pt56tje4msdcq7jkc3imrae.ap-southeast-1.es.amazonaws.com
+  server snd-p-search-v7-analysis-kibana vpc-sand-p-search-v7-analysis-c47pt56tje4msdcq7jkc3imrae.ap-southeast-1.es.amazonaws.com:80 weight 100 check resolvers dns-private inter 1000
+  http-response add-header X-Data-Origin %b/%s  
+
+backend search-debug-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server search-debug-dashboard 172.31.37.79:80 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend airflowdp_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server search-debug-dashboard 172.31.1.23:8080
+  http-response add-header X-Data-Origin %b/%s
+  
+backend airflowdp-flower_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server search-debug-dashboard 172.31.1.23:5555
+  http-response add-header X-Data-Origin %b/%s
+  
+backend airflowdp-grafana_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server search-debug-dashboard 172.31.1.23:3000 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend ci-jenkins_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server ci-jenkins-server 172.31.11.6:8080 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-rlm_backend
+  mode http
+  http-request set-header Host vendor-rlm.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-rlm.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 vendor-rlm.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend sprinkle_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server sprinkle 172.31.42.192:80 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend mim-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host mim-dashboard.production.singapore
+  server mim-dashboard-service-1 mim-dashboard.production.singapore:80 check resolvers dns-private
+  server mim-dashboard-service-2 mim-dashboard.production.singapore:80 check resolvers dns-private
+  server mim-dashboard-service-3 mim-dashboard.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend persona-ingestion_backend
+  mode http
+  http-request set-header Host vendor-persona-ingestion.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 vendor-persona-ingestion.s3-website-ap-southeast-1.amazonaws.com:80 check inter 1000
+  server s3-serv-2 vendor-persona-ingestion.s3-website-ap-southeast-1.amazonaws.com:80 check inter 1000
+  
+backend ads-booking_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host ads-booking.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server sentinal-1 sentinel.production.singapore:80 check resolvers dns-private
+  server sentinal-2 sentinel.production.singapore:80 check resolvers dns-private
+  server sentinal-3 sentinel.production.singapore:80 check resolvers dns-private
+  
+backend finance-orchestrator_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-finance-orchestrator-szudcevbkxvrrzqymxdeyguofy.ap-southeast-1.es.amazonaws.com
+  server finance-orchestrator-kibana vpc-finance-orchestrator-szudcevbkxvrrzqymxdeyguofy.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-finance-orchestrator-szudcevbkxvrrzqymxdeyguofy.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend finance-lassi_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-finance-lassi-fydpkrojc7carhhupd36sy57li.ap-southeast-1.es.amazonaws.com
+  server finance-orchestrator-kibana vpc-finance-lassi-fydpkrojc7carhhupd36sy57li.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-finance-lassi-fydpkrojc7carhhupd36sy57li.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend cms-rmq_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server sprinkle 172.31.6.132:15672 check
+  http-response add-header X-Data-Origin %b/%s
+  
+backend gifting_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host apis-gifting.production.singapore
+  server apis-gifting-1 apis-gifting.production.singapore:80 check resolvers dns-private
+  server apis-gifting-2 apis-gifting.production.singapore:80 check resolvers dns-private
+  server apis-gifting-3 apis-gifting.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend driver-ops-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host driver-ops-dashboard.swiggyops.de
+  server driver-ops-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server driver-ops-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server driver-ops-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend rlm-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rlm-admin.swiggyops.de
+  server rlm-dashboard-1 172.31.36.60:8080 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend search-embedding_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-search-embedding-zzucpznp3hrl2gokutnetipqau.ap-southeast-1.es.amazonaws.com
+  server search-embedding-kibana vpc-search-embedding-zzucpznp3hrl2gokutnetipqau.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-search-embedding-zzucpznp3hrl2gokutnetipqau.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend anm-ads-search_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host vpc-anm-ads-search-yvje3cd7adg3hadfyvoltjuj7u.ap-southeast-1.es.amazonaws.com
+  server anm-ads-search-kibana vpc-anm-ads-search-yvje3cd7adg3hadfyvoltjuj7u.ap-southeast-1.es.amazonaws.com:443 check ssl sni str(vpc-anm-ads-search-yvje3cd7adg3hadfyvoltjuj7u.ap-southeast-1.es.amazonaws.com) verify none resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend restaurant-users_backend
+  mode http
+  http-request set-header Host restaurant-users.s3-website-ap-southeast-1.amazonaws.com
+  server s3-serv-1 restaurant-users.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  server s3-serv-2 restaurant-users.s3-website-ap-southeast-1.amazonaws.com:80 resolvers dns-1 check inter 1000
+  
+backend loki-rock_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host loki.swiggy.prod
+  server loki-1 loki.swiggy.prod:80 check resolvers dns-private
+  server loki-2 loki.swiggy.prod:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend instamart-scm_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host scm-procurement-http.production.singapore
+  server scm-procurement-1 scm-procurement-http.production.singapore:80 check resolvers dns-private
+  server scm-procurement-2 scm-procurement-http.production.singapore:80 check resolvers dns-private
+  server scm-procurement-3 scm-procurement-http.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend ats-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host ats-dashboard.swiggyops.de
+  server ats-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server ats-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server ats-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+  
+backend rill-stg_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rilluat.production.singapore
+  server rilluat-1 rilluat.production.singapore:80 check resolvers dns-private
+  server rilluat-2 rilluat.production.singapore:80 check resolvers dns-private
+  server rilluat-3 rilluat.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend rill-ui_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rill-ui-u4.production.singapore
+  server rill-ui-1 rill-ui-u4.production.singapore:80 check resolvers dns-private
+  server rill-ui-2 rill-ui-u4.production.singapore:80 check resolvers dns-private
+  server rill-ui-3 rill-ui-u4.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+
+backend pangolier-dashboard_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host pangolier-dashboard.swiggyops.de
+  server sno-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server sno-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server sno-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend data-scince-visualizations
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server rlm-dashboard-1 172.31.71.123:8088 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend dstools-backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server dstools-instance 172.31.71.123:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend vendor-feature-toggle_backend
+  mode http
+  option httpclose
+  http-request set-header Host vendor-feature-toggle.s3-website-ap-southeast-1.amazonaws.com
+  balance roundrobin
+  timeout server 3600s
+  default-server inter 3s fall 2 rise 3
+  server vendor-feature-toggle-1 vendor-feature-toggle.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
+  server vendor-feature-toggle-2 vendor-feature-toggle.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
+  server vendor-feature-toggle-3 vendor-feature-toggle.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
+
+backend picker-admin_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host picker-admin.production.singapore 
+  server picker-admin-1 picker-admin.production.singapore:80 check resolvers dns-private
+  server picker-admin-2 picker-admin.production.singapore:80 check resolvers dns-private
+  server picker-admin-3 picker-admin.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend picker-canary_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host picker-admin-canary.production.singapore
+  server picker-prod-1 picker-admin-canary.production.singapore:80 check resolvers dns-private
+  server picker-prod-2 picker-admin-canary.production.singapore:80 check resolvers dns-private
+  server picker-prod-3 picker-admin-canary.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend mydbops_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  server rill-128-72 172.31.11.131:8090 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend cms-sandbox_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host cms-sandbox-ui.swiggyops.de
+  server cms-sandbox-sentinel-1 sentinel.production.singapore:80 check resolvers dns-private
+  server cms-sandbox-sentinel-2 sentinel.production.singapore:80 check resolvers dns-private
+  server cms-sandbox-sentinel-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend g-rill-backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rill.production.singapore 
+  server rill-1 rill.production.singapore:80 check resolvers dns-private
+  server rill-2 rill.production.singapore:80 check resolvers dns-private
+  server rill-3 rill.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend rill-gi_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rill-ui.production.singapore
+  server g-rill-1 rill-ui.production.singapore:80 check resolvers dns-private
+  server g-rill-2 rill-ui.production.singapore:80 check resolvers dns-private
+  server g-rill-3 rill-ui.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend cms-sandbox-test_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host cms-sandbox-ui.production.singapore
+  server cms-sandbox-1 cms-sandbox-ui.production.singapore:80 check resolvers dns-private
+  server cms-sandbox-2 cms-sandbox-ui.production.singapore:80 check resolvers dns-private
+  server cms-sandbox-3 cms-sandbox-ui.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend klaxon_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host klaxon.swiggy.in
+  http-request set-header Host sentinel.production.singapore
+  server klaxon_server-1 sentinel.production.singapore:80 check resolvers dns-private
+  server klaxon_server-2 sentinel.production.singapore:80 check resolvers dns-private
+  server klaxon_server-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend dineout-cms_backend 
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host dineout-cms-dashboard.swiggyops.de
+  server dineout-cms-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server dineout-cms-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server dineout-cms-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend  dinersone-deals_backend 
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host  sentinel.production.singapore
+  http-request set-header x-forwarded-host dinersone-deals-dashboard.swiggyops.de
+  server  dinersone-deals-dashboard-sentinal-1  sentinel.production.singapore:80 check resolvers dns-private
+  server  dinersone-deals-dashboard-sentinal-2  sentinel.production.singapore:80 check resolvers dns-private
+  server  dinersone-deals-dashboard-sentinal-3  sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend dct-compass_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host compass-web-service.production.singapore
+  server compass-1 compass-web-service.production.singapore:80 check resolvers dns-private
+  server compass-2 compass-web-service.production.singapore:80 check resolvers dns-private
+  server compass-3 compass-web-service.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend connect-admin_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host connect-support-panel.production.singapore
+  server connect-support-1 connect-support-panel.production.singapore:80 check resolvers dns-private
+  server connect-support-2 connect-support-panel.production.singapore:80 check resolvers dns-private
+  server connect-support-3 connect-support-panel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend finance-oneview-new_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host finance-oneview.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server finance_sever-1 sentinel.production.singapore:80 check resolvers dns-private
+  server finance_sever-2 sentinel.production.singapore:80 check resolvers dns-private
+  server finance_sever-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend mim-dashboard-v2_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header x-forwarded-host mim-dashboard-v2.swiggyops.de
+  http-request set-header Host sentinel.production.singapore
+  server mim-dashboard-service-1 sentinel.production.singapore:80 check resolvers dns-private
+  server mim-dashboard-service-2 sentinel.production.singapore:80 check resolvers dns-private
+  server mim-dashboard-service-3 sentinel.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend rill-preprod_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rill1135.production.singapore
+  server rilluat-1 rill1135.production.singapore:80 check resolvers dns-private
+  server rilluat-2 rill1135.production.singapore:80 check resolvers dns-private
+  server rilluat-3 rill1135.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend rill-ui-preprod_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host rill-ui-pre-prod.production.singapore
+  server rill-ui-1 rill-ui-pre-prod.production.singapore:80 check resolvers dns-private
+  server rill-ui-2 rill-ui-pre-prod.production.singapore:80 check resolvers dns-private
+  server rill-ui-3 rill-ui-pre-prod.production.singapore:80 check resolvers dns-private
+  http-response add-header X-Data-Origin %b/%s
+
+backend appsmith_backend
+  mode http
+  balance roundrobin
+  default-server inter 3s fall 2 rise 3
+  http-request set-header Host 	appsmith.swiggyops.de
+  server appsmith-server-1 172.31.47.61:80 weight 100 check
+  http-response add-header X-Data-Origin %b/%s
+
+backend discount-config-dashboard_backend
+  mode http
+  option httpclose
+  http-request set-header Host discount-config-dashboard.s3-website-ap-southeast-1.amazonaws.com
+  balance roundrobin
+  timeout server 3600s
+  default-server inter 3s fall 2 rise 3
+  server discount-dashboard-1 discount-config-dashboard.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
+  server discount-dashboard-2 discount-config-dashboard.s3-website-ap-southeast-1.amazonaws.com:80 check resolvers dns-private check inter 1000
